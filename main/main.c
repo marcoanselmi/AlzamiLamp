@@ -1,11 +1,33 @@
 #include "stdio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
 #include "ws2812.h"
+#include "switch.h"
+
+volatile uint8_t should_exit; // for graceful shutdown
 
 void app_main(void)
 {
-    ws2812_init(); // Initialize WS2812 library
+    xTaskCreatePinnedToCore(
+        ws2812_task,
+        "ws2812_task",
+        4096,
+        NULL,
+        5,
+        NULL,
+        1
+    );
+
+    xTaskCreatePinnedToCore(
+        switch_task,
+        "switch_task",
+        2048,
+        NULL,
+        5,
+        NULL,
+        1
+    );
 
     rgb_color_t on = {150, 100, 0};   // Red
     rgb_color_t off_standby = {0, 0, 10}; // All off (standby)

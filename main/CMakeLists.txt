@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "main.c"
     INCLUDE_DIRS "."
-    REQUIRES ws2812
+    REQUIRES ws2812 switch
     )
 
 

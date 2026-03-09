@@ -12,6 +12,8 @@
 #include "esp_log.h"
 #include "ws2812.h"
 
+extern volatile uint8_t should_exit; // for graceful shutdown
+
 // ---------------------------------------------------------------------------
 // WS2812 Hardware Configuration
 // ---------------------------------------------------------------------------
@@ -109,6 +111,18 @@ static bool rmt_init(void)
     return true;
 }
 
+static void rmt_cleanup(void)
+{
+    if (s_rmt_encoder) {
+        rmt_del_encoder(s_rmt_encoder);
+        s_rmt_encoder = NULL;
+    }
+    if (s_rmt_channel) {
+        rmt_del_channel(s_rmt_channel);
+        s_rmt_channel = NULL;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Send the same RGB color to all LEDs in the chain.
 // Builds a single GRB buffer of WS2812_NUM_LEDS*3 bytes and sends it
@@ -158,15 +172,55 @@ static esp_err_t ws2812_transmit_colors(ws2812_led_chain_t chain)
 }
 
 // ---------------------------------------------------------------------------
-// Worker task  (logic 100% unchanged from original)
+// Init and Deinit 
 // ---------------------------------------------------------------------------
-static void ws2812_worker(void *args)
+
+static esp_err_t ws2812_init(void)
 {
+    if (!rmt_init()) return ESP_FAIL;
+
+    if (s_ws_queue == NULL) {
+        s_ws_queue = xQueueCreate(WS2812_QUEUE_LEN, sizeof(ws2812_led_chain_t));
+    }
+
+    if (ws2812_transmit_colors(WS2812_ALL_OFF) != ESP_OK) {  // start with LED off
+        rmt_cleanup();
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+static void ws2812_cleanup(void)
+{
+    if (s_ws_task_handle) {
+        vTaskDelete(s_ws_task_handle);
+        s_ws_task_handle = NULL;
+    }
+    if (s_ws_queue) {
+        vQueueDelete(s_ws_queue);
+        s_ws_queue = NULL;
+    }
+    rmt_cleanup();
+}
+
+
+// ---------------------------------------------------------------------------
+// Worker task: waits for color updates
+// ---------------------------------------------------------------------------
+void ws2812_task(void *args)
+{
+    esp_err_t err = ws2812_init();
+    if (err != ESP_OK) {
+        ESP_LOGE("ws2812", "Initialization failed");
+        vTaskDelete(NULL);
+    }
+
     (void)args;
     TickType_t last_wake_time = xTaskGetTickCount();
     ws2812_led_chain_t incoming_colors;
 
-    while (1)
+    while (!should_exit)
     {
         // Drain the queue — higher severity wins
         if (xQueueReceive(s_ws_queue, &incoming_colors, 0U) == pdTRUE) {
@@ -177,38 +231,15 @@ static void ws2812_worker(void *args)
         }
         vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(WS2812_DELAY_MS));
     }
+
+    ws2812_cleanup();
+    vTaskDelete(NULL);
 }
 
 // ---------------------------------------------------------------------------
-// Public API  (signatures unchanged from original)
+// Public API 
 // ---------------------------------------------------------------------------
 
-esp_err_t ws2812_init(void)
-{
-    if (!rmt_init()) return ESP_FAIL;
-
-    if (s_ws_queue == NULL) {
-        s_ws_queue = xQueueCreate(WS2812_QUEUE_LEN, sizeof(ws2812_led_chain_t));
-    }
-
-    if (ws2812_transmit_colors(WS2812_ALL_OFF) != ESP_OK) {  // start with LED off
-        return ESP_FAIL;
-    }
-
-    if (s_ws_task_handle == NULL) {
-        BaseType_t ok = xTaskCreate(
-            ws2812_worker,
-            "ws2812_worker_task",
-            4096,
-            NULL,
-            5,
-            &s_ws_task_handle
-        );
-        if (ok != pdPASS) return ESP_FAIL;
-    }
-
-    return ESP_OK;
-}
 
 esp_err_t ws2812_set_all_color(rgb_color_t color)
 {

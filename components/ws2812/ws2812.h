@@ -17,7 +17,7 @@ typedef struct {
 
 #define WS2812_ALL_OFF ((ws2812_led_chain_t){ .active = {0} })
 
-esp_err_t ws2812_init(void);
+void ws2812_task(void *args);
 esp_err_t ws2812_set_all_color(rgb_color_t color);
 esp_err_t ws2812_set_led_chain(ws2812_led_chain_t chain);
 
