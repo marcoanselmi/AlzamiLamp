@@ -9,6 +9,8 @@
 #include "driver/rmt_common.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
+#include <math.h>
+
 #include "esp_log.h"
 #include "ws2812.h"
 
@@ -38,7 +40,7 @@ static uint8_t s_grb_buf[WS2812_NUM_LEDS * 3];
 // Task / Queue Configuration  (unchanged from original)
 // ---------------------------------------------------------------------------
 #define WS2812_QUEUE_LEN   1
-#define WS2812_DELAY_MS   10    // worker period in ms
+#define WS2812_DELAY_MS   20    // worker period in ms
 
 // ---------------------------------------------------------------------------
 // RMT handles  (module-private)
@@ -124,6 +126,35 @@ static void rmt_cleanup(void)
 }
 
 // ---------------------------------------------------------------------------
+// Gamma correction
+// ---------------------------------------------------------------------------
+
+// Gamma correction lookup table for 8-bit input values (0-255)
+static uint8_t gamma_table[256];
+static void ws2812_init_gamma_table(float gamma)
+{
+    for (int i = 0; i < 256; i++) {
+        float x = (float)i / 255.0f;
+        float y = powf(x, gamma);
+        int v = (int)(y * 255.0f + 0.5f);
+
+        if (v < 0) v = 0;
+        if (v > 255) v = 255;
+        gamma_table[i] = (uint8_t)v;
+    }
+}
+
+static rgb_color_t apply_gamma(rgb_color_t c)
+{
+    rgb_color_t out = {
+        .r = gamma_table[c.r],
+        .g = gamma_table[c.g],
+        .b = gamma_table[c.b]
+    };
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // Send the same RGB color to all LEDs in the chain.
 // Builds a single GRB buffer of WS2812_NUM_LEDS*3 bytes and sends it
 // in one RMT transmission — each LED consumes 3 bytes and forwards
@@ -138,9 +169,10 @@ static esp_err_t ws2812_transmit_colors(ws2812_led_chain_t chain)
     // Fill buffer: repeat GRB for every LED in the chain
     for (uint8_t i = 0; i < WS2812_NUM_LEDS; i++) {
         if (chain.active[i]) {
-            s_grb_buf[i * 3 + 0] = chain.colors[i].g;
-            s_grb_buf[i * 3 + 1] = chain.colors[i].r;
-            s_grb_buf[i * 3 + 2] = chain.colors[i].b;
+            rgb_color_t gamma_corrected = apply_gamma(chain.colors[i]);
+            s_grb_buf[i * 3 + 0] = gamma_corrected.g;
+            s_grb_buf[i * 3 + 1] = gamma_corrected.r;
+            s_grb_buf[i * 3 + 2] = gamma_corrected.b;
         } else {
             s_grb_buf[i * 3 + 0] = 0;
             s_grb_buf[i * 3 + 1] = 0;
@@ -188,6 +220,8 @@ static esp_err_t ws2812_init(void)
         return ESP_FAIL;
     }
 
+    ws2812_init_gamma_table(2.2f); // typical gamma value for LEDs
+
     return ESP_OK;
 }
 
@@ -210,26 +244,24 @@ static void ws2812_cleanup(void)
 // ---------------------------------------------------------------------------
 void ws2812_task(void *args)
 {
+    (void)args; // unused
+    
     esp_err_t err = ws2812_init();
     if (err != ESP_OK) {
         ESP_LOGE("ws2812", "Initialization failed");
         vTaskDelete(NULL);
     }
 
-    (void)args;
-    TickType_t last_wake_time = xTaskGetTickCount();
     ws2812_led_chain_t incoming_colors;
 
     while (!should_exit)
     {
         // Drain the queue — higher severity wins
-        if (xQueueReceive(s_ws_queue, &incoming_colors, 0U) == pdTRUE) {
-            esp_err_t err = ws2812_transmit_colors(incoming_colors);
-            if (err != ESP_OK) {
-                ESP_LOGE("ws2812", "Failed to transmit color (%d)", err);
-            }
+        xQueueReceive(s_ws_queue, &incoming_colors, portMAX_DELAY);
+        esp_err_t err = ws2812_transmit_colors(incoming_colors);
+        if (err != ESP_OK) {
+            ESP_LOGE("ws2812", "Failed to transmit color (%d)", err);
         }
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(WS2812_DELAY_MS));
     }
 
     ws2812_cleanup();

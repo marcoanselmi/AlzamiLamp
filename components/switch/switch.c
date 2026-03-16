@@ -14,6 +14,7 @@ extern volatile uint8_t should_exit; // for graceful shutdown
 static const char *TAG = "switch";
 
 static esp_timer_handle_t s_poll_timer = NULL;
+static QueueHandle_t s_switch_event_queue = NULL;
 
 static struct{
     uint8_t state;
@@ -31,7 +32,7 @@ static esp_err_t switch_init(void)
 {
     gpio_config_t io_conf = {
         .intr_type = GPIO_INTR_DISABLE,
-        .mode = GPIO_MODE_INPUT,
+        . mode = GPIO_MODE_INPUT,
         .pin_bit_mask = (1ULL << SWITCH_GPIO),
         .pull_down_en = GPIO_PULLDOWN_ENABLE,
         .pull_up_en = GPIO_PULLUP_DISABLE
@@ -41,8 +42,13 @@ static esp_err_t switch_init(void)
         return err;
     }
 
+    s_switch_event_queue = xQueueCreate(1, sizeof(uint8_t));
+    if (s_switch_event_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create event queue");
+        return ESP_FAIL;
+    }
+
     // Set up an interrupt for polling the switch from timer
-    // Set timer
     const esp_timer_create_args_t timer_args = {
         .callback = &switch_interrupt_handler,
         .name = "switch_poll_timer"
@@ -95,12 +101,14 @@ void switch_task(void *args)
         if ( (s_switch_state.history & SWITCH_HISTORY_MASK) == 0x00 ) { // stable pressed
             if (s_switch_state.state == 0) { // was previously released
                 s_switch_state.state = 1;
-                ESP_LOGI(TAG, "Switch pressed");
+                xQueueSend(s_switch_event_queue, &s_switch_state.state, 0);
+                ESP_LOGI(TAG, "Switch tilted");
             }
         } else if ( (s_switch_state.history & SWITCH_HISTORY_MASK) == SWITCH_HISTORY_MASK ) { // stable released
             if (s_switch_state.state == 1) { // was previously pressed
                 s_switch_state.state = 0;
-                ESP_LOGI(TAG, "Switch released");
+                xQueueSend(s_switch_event_queue, &s_switch_state.state, 0);
+                ESP_LOGI(TAG, "Switch upright");
             }
         }
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -110,3 +118,11 @@ void switch_task(void *args)
     vTaskDelete(NULL);
 }
 
+uint8_t switch_get_event(void)
+{
+    uint8_t event;
+    if (xQueueReceive(s_switch_event_queue, &event, 0) == pdTRUE) {
+        return event; // 1 for tilted, 0 for upright
+    }
+    return 0xFF; // No event
+}

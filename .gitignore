@@ -1,3 +1,5 @@
 .vscode/
 build/
 sdkconfig
+time.txt
+managed_components/
