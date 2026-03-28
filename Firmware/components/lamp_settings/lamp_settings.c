@@ -2,135 +2,248 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
-#include "ws2812.h"
+#include <string.h>
 
-static const char *TAG       = "SETTINGS";
-static const char *NVS_NS    = "lamp";       // namespace NVS, max 15 caratteri
+static const char *TAG = "SETTINGS";
 
-// Chiavi NVS — max 15 caratteri ciascuna
-static const char *KEY_ON    = "on";
-static const char *KEY_ON_R  = "on_r";
-static const char *KEY_ON_G  = "on_g";
-static const char *KEY_ON_B  = "on_b";
-static const char *KEY_OFF_R = "off_r";
-static const char *KEY_OFF_G = "off_g";
-static const char *KEY_OFF_B = "off_b";
+// ─── Descrittore di una singola impostazione ──────────────────────────────────
 
-// Valori di default applicati se NVS è vuoto
-static const lamp_settings_t DEFAULTS = {
-    .on         = true,
-    .on_color   = {.r = 250, .g = 200, .b = 200},
-    .off_color  = {.r = 0,   .g = 0,   .b = 20},
+typedef struct {
+    const char     *key;
+    setting_type_t  type;
+    setting_value_t def;
+} setting_desc_t;
+
+// ─── Registro dominio lampada — namespace "lamp" ──────────────────────────────
+
+static const setting_desc_t LAMP_REGISTRY[] = {
+    { SETTING_KEY_ON_COLOR,  SETTING_TYPE_RGB,  SETTING_RGB(250, 200, 200) },
+    { SETTING_KEY_OFF_COLOR, SETTING_TYPE_RGB,  SETTING_RGB(0,   0,   20)  },
 };
 
-// ─── Helpers interni ──────────────────────────────────────────────────────────
+#define LAMP_REGISTRY_SIZE (sizeof(LAMP_REGISTRY) / sizeof(LAMP_REGISTRY[0]))
 
-static nvs_handle_t open_nvs(nvs_open_mode_t mode)
+// ─── Registro dominio wifi/rete — namespace "wifi" ────────────────────────────
+
+static const setting_desc_t WIFI_REGISTRY[] = {
+    { SETTING_KEY_SSID,        SETTING_TYPE_STRING, SETTING_STR("")          },
+    { SETTING_KEY_PASSWORD,    SETTING_TYPE_STRING, SETTING_STR("")          },
+    { SETTING_KEY_IP_STATIC,   SETTING_TYPE_STRING, SETTING_STR("")          },
+    { SETTING_KEY_UDP_EN,      SETTING_TYPE_BOOL,   SETTING_BOOL(true)       },
+    { SETTING_KEY_UDP_PORT,    SETTING_TYPE_U16,    SETTING_U16(4210)        },
+    { SETTING_KEY_MQTT_EN,     SETTING_TYPE_BOOL,   SETTING_BOOL(false)      },
+    { SETTING_KEY_MQTT_BROKER, SETTING_TYPE_STRING, SETTING_STR("")          },
+    { SETTING_KEY_MQTT_TOPIC,  SETTING_TYPE_STRING, SETTING_STR("lampada")   },
+};
+
+#define WIFI_REGISTRY_SIZE (sizeof(WIFI_REGISTRY) / sizeof(WIFI_REGISTRY[0]))
+
+// ─── Stato in RAM ─────────────────────────────────────────────────────────────
+
+static setting_value_t s_lamp_values[LAMP_REGISTRY_SIZE];
+static setting_value_t s_wifi_values[WIFI_REGISTRY_SIZE];
+
+static bool s_lamp_initialized = false;
+static bool s_wifi_initialized = false;
+
+// ─── Logica interna condivisa ─────────────────────────────────────────────────
+
+static int find_index(const setting_desc_t *registry, int size, const char *key)
 {
-    nvs_handle_t handle;
-    esp_err_t err = nvs_open(NVS_NS, mode, &handle);
+    for (int i = 0; i < size; i++) {
+        if (strcmp(registry[i].key, key) == 0) return i;
+    }
+    return -1;
+}
+
+static nvs_handle_t open_nvs(const char *ns, nvs_open_mode_t mode)
+{
+    nvs_handle_t h = 0;
+    esp_err_t err = nvs_open(ns, mode, &h);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
-        return 0;
+        ESP_LOGE(TAG, "nvs_open('%s') failed: %s", ns, esp_err_to_name(err));
     }
-    return handle;
+    return h;
 }
 
-static uint8_t read_u8(nvs_handle_t h, const char *key, uint8_t fallback)
+static void nvs_read_value(nvs_handle_t h, const setting_desc_t *desc,
+                           setting_value_t *out)
 {
-    uint8_t val = fallback;
-    esp_err_t err = nvs_get_u8(h, key, &val);
-    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
-        ESP_LOGW(TAG, "read '%s' failed: %s", key, esp_err_to_name(err));
+    *out = desc->def;
+
+    switch (desc->type) {
+        case SETTING_TYPE_BOOL:
+        case SETTING_TYPE_U8: {
+            uint8_t raw;
+            if (nvs_get_u8(h, desc->key, &raw) == ESP_OK) {
+                out->as_bool = (raw != 0);
+                out->as_u8   = raw;
+            }
+            break;
+        }
+        case SETTING_TYPE_U16: {
+            uint16_t raw;
+            if (nvs_get_u16(h, desc->key, &raw) == ESP_OK) {
+                out->as_u16 = raw;
+            }
+            break;
+        }
+        case SETTING_TYPE_RGB: {
+            uint8_t buf[3];
+            size_t sz = sizeof(buf);
+            if (nvs_get_blob(h, desc->key, buf, &sz) == ESP_OK && sz == 3) {
+                out->as_rgb = (rgb_color_t){ buf[0], buf[1], buf[2] };
+            }
+            break;
+        }
+        case SETTING_TYPE_STRING: {
+            size_t sz = SETTING_STR_MAX;
+            nvs_get_str(h, desc->key, out->as_str, &sz);
+            break;
+        }
     }
-    return val;
+
+    out->type = desc->type;
 }
 
-static bool read_bool(nvs_handle_t h, const char *key, bool fallback)
+static void nvs_write_value(nvs_handle_t h, const setting_desc_t *desc,
+                            const setting_value_t *val)
 {
-    uint8_t val = fallback ? 1 : 0;
-    esp_err_t err = nvs_get_u8(h, key, &val);
-    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
-        ESP_LOGW(TAG, "read '%s' failed: %s", key, esp_err_to_name(err));
+    switch (desc->type) {
+        case SETTING_TYPE_BOOL:
+            nvs_set_u8(h, desc->key, val->as_bool ? 1 : 0);
+            break;
+        case SETTING_TYPE_U8:
+            nvs_set_u8(h, desc->key, val->as_u8);
+            break;
+        case SETTING_TYPE_U16:
+            nvs_set_u16(h, desc->key, val->as_u16);
+            break;
+        case SETTING_TYPE_RGB: {
+            uint8_t buf[3] = { val->as_rgb.r, val->as_rgb.g, val->as_rgb.b };
+            nvs_set_blob(h, desc->key, buf, sizeof(buf));
+            break;
+        }
+        case SETTING_TYPE_STRING:
+            nvs_set_str(h, desc->key, val->as_str);
+            break;
     }
-    return val != 0;
 }
 
-// ─── API pubblica ─────────────────────────────────────────────────────────────
-
-void lamp_settings_init(lamp_settings_t *out)
+static void _init_domain(const char *ns,
+                           const setting_desc_t *registry, int reg_size,
+                           setting_value_t *values)
 {
-    if (!out) return;
+    // Use NVS_READWRITE during init to create namespace if it doesn't exist
+    nvs_handle_t h = open_nvs(ns, NVS_READWRITE);
 
-    // Inizializza NVS — se la partizione è corrotta o aggiornata la cancella
-    esp_err_t err = nvs_flash_init();
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES ||
-        err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_LOGW(TAG, "NVS partition issue (%s) — erasing and reinitializing",
-                 esp_err_to_name(err));
-        nvs_flash_erase();
-        err = nvs_flash_init();
+    for (int i = 0; i < reg_size; i++) {
+        if (h) {
+            nvs_read_value(h, &registry[i], &values[i]);
+        } else {
+            values[i] = registry[i].def;
+        }
     }
 
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_flash_init failed: %s — using defaults",
-                 esp_err_to_name(err));
-        *out = DEFAULTS;
-        return;
-    }
-
-    nvs_handle_t h = open_nvs(NVS_READONLY);
-    if (!h) {
-        // Namespace non ancora creato — prima volta, usa default
-        ESP_LOGI(TAG, "No saved settings found — applying defaults");
-        *out = DEFAULTS;
-        return;
-    }
-
-    out->on         = read_bool(h, KEY_ON,    DEFAULTS.on);
-    out->on_color.r = read_u8  (h, KEY_ON_R,  DEFAULTS.on_color.r);
-    out->on_color.g = read_u8  (h, KEY_ON_G,  DEFAULTS.on_color.g);
-    out->on_color.b = read_u8  (h, KEY_ON_B,  DEFAULTS.on_color.b);
-    out->off_color.r = read_u8 (h, KEY_OFF_R, DEFAULTS.off_color.r);
-    out->off_color.g = read_u8 (h, KEY_OFF_G, DEFAULTS.off_color.g);
-    out->off_color.b = read_u8 (h, KEY_OFF_B, DEFAULTS.off_color.b);
-
-    nvs_close(h);
-
-    ESP_LOGI(TAG, "Loaded: on=%d on_color=(%d,%d,%d) off_color=(%d,%d,%d)",
-             out->on, out->on_color.r, out->on_color.g, out->on_color.b,
-             out->off_color.r, out->off_color.g, out->off_color.b);
+    if (h) nvs_close(h);
 }
 
-void lamp_settings_save(const lamp_settings_t *s)
+static bool settings_get(const setting_desc_t *registry, int reg_size,
+                          const setting_value_t *values,
+                          const char *ns,
+                          const char *key, setting_value_t *out)
 {
-    if (!s) return;
+    int i = find_index(registry, reg_size, key);
+    if (i < 0) {
+        ESP_LOGW(TAG, "[%s] get: chiave sconosciuta '%s'", ns, key);
+        return false;
+    }
+    *out = values[i];
+    return true;
+}
 
-    nvs_handle_t h = open_nvs(NVS_READWRITE);
-    if (!h) return;
+static bool settings_set(const char *ns,
+                          const setting_desc_t *registry, int reg_size,
+                          setting_value_t *values,
+                          const char *key, const setting_value_t *value)
+{
+    int i = find_index(registry, reg_size, key);
+    if (i < 0) {
+        ESP_LOGW(TAG, "[%s] set: chiave sconosciuta '%s'", ns, key);
+        return false;
+    }
 
-    esp_err_t err = ESP_OK;
+    if (value->type != registry[i].type) {
+        ESP_LOGE(TAG, "[%s] set: tipo errato per '%s' (atteso %d, ricevuto %d)",
+                 ns, key, registry[i].type, value->type);
+        return false;
+    }
 
-    err |= nvs_set_u8(h, KEY_ON,    s->on ? 1 : 0);
-    err |= nvs_set_u8(h, KEY_ON_R,  s->on_color.r);
-    err |= nvs_set_u8(h, KEY_ON_G,  s->on_color.g);
-    err |= nvs_set_u8(h, KEY_ON_B,  s->on_color.b);
-    err |= nvs_set_u8(h, KEY_OFF_R, s->off_color.r);
-    err |= nvs_set_u8(h, KEY_OFF_G, s->off_color.g);
-    err |= nvs_set_u8(h, KEY_OFF_B, s->off_color.b);
+    values[i] = *value;
 
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "One or more nvs_set failed");
+    nvs_handle_t h = open_nvs(ns, NVS_READWRITE);
+    if (h) {
+        nvs_write_value(h, &registry[i], value);
+        nvs_commit(h);
         nvs_close(h);
-        return;
+        ESP_LOGI(TAG, "[%s] set: '%s' salvato", ns, key);
     }
 
-    err = nvs_commit(h);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "nvs_commit failed: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "Settings saved successfully");
+    return true;
+}
+
+// ─── API lampada ─────────────────────────────────────────────
+
+bool lamp_settings_get(const char *key, setting_value_t *out)
+{
+    if (!s_lamp_initialized || !key || !out) return false;
+    return settings_get(LAMP_REGISTRY, LAMP_REGISTRY_SIZE, s_lamp_values,
+                        "lamp", key, out);
+}
+
+bool lamp_settings_set(const char *key, const setting_value_t *value)
+{
+    if (!s_lamp_initialized || !key || !value) return false;
+    return settings_set("lamp", LAMP_REGISTRY, LAMP_REGISTRY_SIZE, s_lamp_values,
+                        key, value);
+}
+
+// ─── API wifi/network  ──────────────────────────────────────────
+
+bool wifi_settings_get(const char *key, setting_value_t *out)
+{
+    if (!s_wifi_initialized || !key || !out) return false;
+    return settings_get(WIFI_REGISTRY, WIFI_REGISTRY_SIZE, s_wifi_values,
+                        "wifi", key, out);
+}
+
+bool wifi_settings_set(const char *key, const setting_value_t *value)
+{
+    if (!s_wifi_initialized || !key || !value) return false;
+    return settings_set("wifi", WIFI_REGISTRY, WIFI_REGISTRY_SIZE, s_wifi_values,
+                        key, value);
+}
+
+// ─── API Generic init -────────────────────────────────────────────────
+void settings_init(void)
+{
+    // Initialize NVS Flash (must be done before opening any NVS namespace)
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW("MAIN", "Erasing NVS Flash due to initialization error");
+        nvs_flash_erase();
+        nvs_flash_init();
     }
 
-    nvs_close(h);
+    if (!s_lamp_initialized) {
+        _init_domain("lamp", LAMP_REGISTRY, LAMP_REGISTRY_SIZE, s_lamp_values);
+        s_lamp_initialized = true;
+        ESP_LOGI(TAG, "Dominio lamp inizializzato (%d impostazioni)", LAMP_REGISTRY_SIZE);
+    }
+
+    if (!s_wifi_initialized) {
+        _init_domain("wifi", WIFI_REGISTRY, WIFI_REGISTRY_SIZE, s_wifi_values);
+        s_wifi_initialized = true;
+        ESP_LOGI(TAG, "Dominio wifi inizializzato (%d impostazioni)", WIFI_REGISTRY_SIZE);
+    }
 }

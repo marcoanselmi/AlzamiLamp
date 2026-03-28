@@ -1,10 +1,10 @@
 #include "lamp_udp.h"
+#include "lamp_cmd.h"
+#include "lamp_settings.h"
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/queue.h"
-#include "cJSON.h"
 
 #include <string.h>
 #include <sys/socket.h>
@@ -13,20 +13,16 @@
 #include <unistd.h>
 #include <errno.h>
 
-// ─── Config ───────────────────────────────────────────────────────────────────
 #define UDP_RX_BUF_SIZE   256
-#define UDP_QUEUE_DEPTH   8
 #define UDP_TASK_STACK    4096
 #define UDP_TASK_PRIORITY 5
 
 static const char *TAG = "UDP";
 
-extern volatile uint8_t should_exit; // for graceful shutdown
+extern volatile uint8_t should_exit;
 
-// ─── Module state ─────────────────────────────────────────────────────────────
-static QueueHandle_t s_cmd_queue = NULL;
+// ─── ACK ──────────────────────────────────────────────────────────────────────
 
-// ─── ACK helpers ─────────────────────────────────────────────────────────────
 static void send_ack(int sock, struct sockaddr_in *dest, socklen_t dest_len,
                      bool ok, const char *error)
 {
@@ -34,99 +30,17 @@ static void send_ack(int sock, struct sockaddr_in *dest, socklen_t dest_len,
     if (ok) {
         snprintf(buf, sizeof(buf), "{\"ok\":true}");
     } else {
-        snprintf(buf, sizeof(buf), "{\"ok\":false,\"error\":\"%s\"}", error);
+        snprintf(buf, sizeof(buf), "{\"ok\":false,\"error\":\"%s\"}", error ? error : "");
     }
     sendto(sock, buf, strlen(buf), 0, (struct sockaddr *)dest, dest_len);
 }
 
-// ─── JSON parser ─────────────────────────────────────────────────────────────
-static void parse_and_enqueue(const char *data, int len,
-                               int sock,
-                               struct sockaddr_in *sender,
-                               socklen_t sender_len)
-{
-    char *buf = strndup(data, len);
-    if (!buf) {
-        ESP_LOGE(TAG, "strndup OOM");
-        send_ack(sock, sender, sender_len, false, "out of memory");
-        return;
-    }
-
-    cJSON *root = cJSON_Parse(buf);
-    free(buf);
-
-    if (!root) {
-        ESP_LOGW(TAG, "Invalid JSON");
-        send_ack(sock, sender, sender_len, false, "invalid json");
-        return;
-    }
-
-    cJSON *cmd_item = cJSON_GetObjectItem(root, "cmd");
-    if (!cJSON_IsString(cmd_item)) {
-        ESP_LOGW(TAG, "Missing 'cmd' field");
-        send_ack(sock, sender, sender_len, false, "missing cmd field");
-        cJSON_Delete(root);
-        return;
-    }
-
-    lamp_cmd_t cmd = {0};
-    const char *cs = cmd_item->valuestring;
-
-    if (strcmp(cs, "on") == 0) {
-        cmd.type = LAMP_CMD_ON;
-
-    } else if (strcmp(cs, "off") == 0) {
-        cmd.type = LAMP_CMD_OFF;
-
-    } else if (strcmp(cs, "set_on_color") == 0) {
-        cJSON *r = cJSON_GetObjectItem(root, "r");
-        cJSON *g = cJSON_GetObjectItem(root, "g");
-        cJSON *b = cJSON_GetObjectItem(root, "b");
-        if (!cJSON_IsNumber(r) || !cJSON_IsNumber(g) || !cJSON_IsNumber(b)) {
-            send_ack(sock, sender, sender_len, false, "missing r/g/b");
-            cJSON_Delete(root);
-            return;
-        }
-        cmd.type = LAMP_CMD_SET_ON_COLOR;
-        cmd.color.r = (uint8_t)r->valueint;
-        cmd.color.g = (uint8_t)g->valueint;
-        cmd.color.b = (uint8_t)b->valueint;
-
-    } else if (strcmp(cs, "set_off_color") == 0) {
-        cJSON *r = cJSON_GetObjectItem(root, "r");
-        cJSON *g = cJSON_GetObjectItem(root, "g");
-        cJSON *b = cJSON_GetObjectItem(root, "b");
-        if (!cJSON_IsNumber(r) || !cJSON_IsNumber(g) || !cJSON_IsNumber(b)) {
-            send_ack(sock, sender, sender_len, false, "missing r/g/b");
-            cJSON_Delete(root);
-            return;
-        }
-        cmd.type = LAMP_CMD_SET_OFF_COLOR;
-        cmd.color.r = (uint8_t)r->valueint;
-        cmd.color.g = (uint8_t)g->valueint;
-        cmd.color.b = (uint8_t)b->valueint;
-
-    } else {
-        ESP_LOGW(TAG, "Unknown cmd: %s", cs);
-        send_ack(sock, sender, sender_len, false, "unknown cmd");
-        cJSON_Delete(root);
-        return;
-    }
-
-    cJSON_Delete(root);
-
-    send_ack(sock, sender, sender_len, true, NULL);
-
-    if (xQueueSend(s_cmd_queue, &cmd, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "Queue full — dropping '%s'", cs);
-    } else {
-        ESP_LOGI(TAG, "Enqueued: %s", cs);
-    }
-}
-
 // ─── Listener task ────────────────────────────────────────────────────────────
+
 static void udp_listener_task(void *arg)
 {
+    uint16_t port = (uint16_t)(uintptr_t)arg;
+
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) {
         ESP_LOGE(TAG, "socket() failed: errno %d", errno);
@@ -139,7 +53,7 @@ static void udp_listener_task(void *arg)
 
     struct sockaddr_in local = {
         .sin_family      = AF_INET,
-        .sin_port        = htons(LAMP_UDP_PORT),
+        .sin_port        = htons(port),
         .sin_addr.s_addr = htonl(INADDR_ANY),
     };
 
@@ -150,7 +64,7 @@ static void udp_listener_task(void *arg)
         return;
     }
 
-    ESP_LOGI(TAG, "Listening on UDP port %d", LAMP_UDP_PORT);
+    ESP_LOGI(TAG, "In ascolto su porta UDP %d", port);
 
     static char rx_buf[UDP_RX_BUF_SIZE];
 
@@ -164,43 +78,71 @@ static void udp_listener_task(void *arg)
             ESP_LOGE(TAG, "recvfrom() failed: errno %d", errno);
             continue;
         }
-
         rx_buf[n] = '\0';
-        ESP_LOGI(TAG, "RX from %s:%d — %s",
-                 inet_ntoa(sender.sin_addr),
-                 ntohs(sender.sin_port),
-                 rx_buf);
 
-        parse_and_enqueue(rx_buf, n, sock, &sender, sender_len);
+        ESP_LOGI(TAG, "RX da %s:%d — %s",
+                 inet_ntoa(sender.sin_addr), ntohs(sender.sin_port), rx_buf);
+
+        // Parsing delegato a lamp_cmd
+        lamp_cmd_t cmd;
+        char err[64];
+        if (!lamp_cmd_parse_json(rx_buf, n, &cmd, err, sizeof(err))) {
+            ESP_LOGW(TAG, "Parse error: %s", err);
+            send_ack(sock, &sender, sender_len, false, err);
+            continue;
+        }
+
+        // Via UDP è permesso modificare solo impostazioni del dominio "lamp",
+        // non quelle di rete (wifi) — per quelle usare la pagina web
+        if (cmd.type == LAMP_CMD_SET_SETTING && strcmp(cmd.domain, "wifi") == 0) {
+            ESP_LOGW(TAG, "Modifica impostazioni wifi non permessa via UDP");
+            send_ack(sock, &sender, sender_len, false, "wifi settings non modificabili via UDP");
+            continue;
+        }
+
+        send_ack(sock, &sender, sender_len, true, NULL);
+        lamp_cmd_enqueue(&cmd);
     }
 
     close(sock);
     vTaskDelete(NULL);
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ─── API pubblica ─────────────────────────────────────────────────────────────
+
 void udp_start(void)
 {
-    if (s_cmd_queue) {
-        ESP_LOGW(TAG, "udp_start() called more than once — ignoring");
+    ESP_LOGI(TAG, "udp_start() called");
+    
+    // Controlla se UDP è abilitato nelle impostazioni
+    setting_value_t en;
+    if (!wifi_settings_get(SETTING_KEY_UDP_EN, &en)) {
+        ESP_LOGW(TAG, "Impossibile leggere impostazione UDP_EN — assuming disabled");
+        return;
+    }
+    
+    if (!en.as_bool) {
+        ESP_LOGI(TAG, "UDP disabilitato nelle impostazioni — skip");
         return;
     }
 
-    s_cmd_queue = xQueueCreate(UDP_QUEUE_DEPTH, sizeof(lamp_cmd_t));
-    if (!s_cmd_queue) {
-        ESP_LOGE(TAG, "Failed to create command queue");
+    // Leggi la porta dalle impostazioni
+    setting_value_t port_val;
+    uint16_t port = 4210; // default di fallback
+    if (!wifi_settings_get(SETTING_KEY_UDP_PORT, &port_val)) {
+        ESP_LOGW(TAG, "Impossibile leggere UDP_PORT — using default %d", port);
+    } else {
+        port = port_val.as_u16;
+    }
+
+    // Passa la porta al task come argomento (cast a puntatore, tecnica standard FreeRTOS)
+    BaseType_t result = xTaskCreate(udp_listener_task, "udp_listener",
+                UDP_TASK_STACK, (void *)(uintptr_t)port, UDP_TASK_PRIORITY, NULL);
+    
+    if (result != pdPASS) {
+        ESP_LOGE(TAG, "Errore creazione task UDP listener");
         return;
     }
-
-    xTaskCreate(udp_listener_task, "udp_listener",
-                UDP_TASK_STACK, NULL, UDP_TASK_PRIORITY, NULL);
-}
-
-lamp_cmd_t udp_get_command(TickType_t timeout_ms)
-{
-    lamp_cmd_t cmd = { .type = LAMP_CMD_NONE };
-    if (s_cmd_queue) {
-        xQueueReceive(s_cmd_queue, &cmd, pdMS_TO_TICKS(timeout_ms));
-    }
-    return cmd;
+    
+    ESP_LOGI(TAG, "UDP listener task creato — porta: %d", port);
 }

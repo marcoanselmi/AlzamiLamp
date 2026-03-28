@@ -1,7 +1,6 @@
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
-#include "nvs_flash.h"
 #include "freertos/event_groups.h"
 
 #define WIFI_SSID      "Vodafone-uaifai"
@@ -38,13 +37,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
-void wifi_init(void *args) {
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        nvs_flash_erase();
-        nvs_flash_init();
-    }
-
+void wifi_init(void) {
     wifi_event_group = xEventGroupCreate();
 
     esp_netif_init();
@@ -93,7 +86,8 @@ void wifi_init(void *args) {
     }
 
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
-    vTaskDelete(NULL);
+
+    return;
 }
 
 void wifi_wait_for_connection() {

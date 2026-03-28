@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_pm.h"
+#include "nvs_flash.h"
 
 #include "ws2812.h"
 #include "switch.h"
@@ -12,12 +13,13 @@
 #include "wifi.h"
 #include "ntp_time.h"
 #include "lamp_udp.h"
+#include "lamp_settings.h"
+#include "lamp_cmd.h"
 
 volatile uint8_t should_exit; // for graceful shutdown
 
 void app_main(void)
 {
-
     // Set light sleep mode
     esp_pm_config_t pm_config = {
         .max_freq_mhz = 240,
@@ -26,48 +28,44 @@ void app_main(void)
     };
     esp_pm_configure(&pm_config);
 
-    xTaskCreatePinnedToCore(
+    // Initialize settings
+    settings_init();
+
+    // Initialize command queue (must be before any task that uses it)
+    lamp_cmd_queue_init();
+    xTaskCreate(
         ws2812_task,
         "ws2812_task",
         4096,
         NULL,
         5,
-        NULL,
-        1
+        NULL
     );
 
-    xTaskCreatePinnedToCore(
+    // Stand switch task
+    xTaskCreate(
         switch_task,
         "switch_task",
         2048,
         NULL,
         5,
-        NULL,
-        1
+        NULL
     );
 
     vTaskDelay(pdMS_TO_TICKS(100)); // Let tasks initialize
 
-    xTaskCreatePinnedToCore(
+    // Main logic task
+    xTaskCreate(
         main_logic_task,
         "main_logic_task",
-        2048,
+        6144,
         NULL,
         5,
-        NULL,
-        1
+        NULL
     );
 
-    xTaskCreatePinnedToCore(
-        wifi_init,
-        "wifi_init",
-        4096,
-        NULL,
-        5,
-        NULL,
-        0
-    );
-
+    // WiFi and network
+    wifi_init();
     wifi_wait_for_connection();
     
     //sync_time();
