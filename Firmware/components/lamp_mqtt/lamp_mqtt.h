@@ -2,24 +2,12 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "lamp_cmd.h"
 #include <stddef.h>
 #include <stdbool.h>
 
 // ─── Command types ────────────────────────────────────────────────────────────
-
-typedef enum {
-    LAMP_CMD_NONE = 0,     // returned by mqtt_get_command() on timeout
-    LAMP_CMD_ON,
-    LAMP_CMD_OFF,
-    LAMP_CMD_BRIGHTNESS,   // payload: brightness (0–255)
-    LAMP_CMD_COLOR,        // payload: r, g, b (0–255 each)
-} lamp_cmd_type_t;
-
-typedef struct {
-    lamp_cmd_type_t type;
-    uint8_t         brightness;
-    uint8_t         r, g, b;
-} lamp_cmd_t;
+// (imported from lamp_cmd.h)
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 

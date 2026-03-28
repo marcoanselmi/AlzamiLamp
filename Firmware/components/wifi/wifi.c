@@ -39,7 +39,6 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 }
 
 void wifi_init(void *args) {
-    // NVS is required by WiFi driver
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();
@@ -48,22 +47,31 @@ void wifi_init(void *args) {
 
     wifi_event_group = xEventGroupCreate();
 
-    // Init network interface and event loop
     esp_netif_init();
     esp_event_loop_create_default();
-    esp_netif_create_default_wifi_sta();
 
-    // Init WiFi with default config
+    // Save the netif handle this time
+    esp_netif_t *netif = esp_netif_create_default_wifi_sta();
+
+    // ── Static IP ────────────────────────────────────────────────
+    esp_netif_dhcpc_stop(netif);
+
+    esp_netif_ip_info_t ip_info = {
+        .ip      = { .addr = ESP_IP4TOADDR(192, 168, 1, 111) },
+        .netmask = { .addr = ESP_IP4TOADDR(255, 255, 255, 0) },
+        .gw      = { .addr = ESP_IP4TOADDR(192, 168, 1,  1) },
+    };
+    esp_netif_set_ip_info(netif, &ip_info);
+    // ─────────────────────────────────────────────────────────────
+
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&cfg);
 
-    // Register event handlers
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
                                         &wifi_event_handler, NULL, NULL);
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                         &wifi_event_handler, NULL, NULL);
 
-    // Set credentials
     wifi_config_t wifi_config = {
         .sta = {
             .ssid     = WIFI_SSID,
@@ -75,18 +83,17 @@ void wifi_init(void *args) {
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     esp_wifi_start();
 
-    // Block here until connected or failed
     EventBits_t bits = xEventGroupWaitBits(wifi_event_group,
-                        WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-                        pdFALSE, pdFALSE, portMAX_DELAY);
-
+                                           WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                           pdFALSE, pdFALSE, portMAX_DELAY);
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI("WIFI", "Connected successfully");
     } else {
         ESP_LOGE("WIFI", "Connection failed");
     }
 
-    vTaskDelete(NULL); // Delete this task after initialization
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    vTaskDelete(NULL);
 }
 
 void wifi_wait_for_connection() {

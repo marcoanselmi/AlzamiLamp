@@ -10,16 +10,22 @@
 #include "esp_mac.h"
 #include "esp_timer.h"
 #include <math.h>
+#include "esp_pm.h"
+
+
 
 #include "esp_log.h"
 #include "ws2812.h"
 
 extern volatile uint8_t should_exit; // for graceful shutdown
 
+// Lock to prevent sleep mode during transmission
+static esp_pm_lock_handle_t s_pm_lock;
+
 // ---------------------------------------------------------------------------
 // WS2812 Hardware Configuration
 // ---------------------------------------------------------------------------
-#define WS2812_GPIO              GPIO_NUM_1
+#define WS2812_GPIO              GPIO_NUM_3
 #define WS2812_RMT_RESOLUTION_HZ 40000000    // 40 MHz => 1 tick = 25 ns
 
 // WS2812 bit timings in nanoseconds
@@ -68,12 +74,12 @@ static inline uint16_t ns_to_ticks(uint32_t ns)
 static bool rmt_init(void)
 {
     rmt_tx_channel_config_t tx_cfg = {
-        .clk_src           = RMT_CLK_SRC_DEFAULT,
+        .clk_src           = RMT_CLK_SRC_XTAL,
         .gpio_num          = WS2812_GPIO,
         .mem_block_symbols = 64,          // small; DMA streams the rest
         .resolution_hz     = WS2812_RMT_RESOLUTION_HZ,
         .trans_queue_depth = 4,
-        .flags.with_dma    = 1,           // required for single LED and beyond
+        .flags.with_dma    = 1,           
     };
 
     if (rmt_new_tx_channel(&tx_cfg, &s_rmt_channel) != ESP_OK) {
@@ -109,6 +115,8 @@ static bool rmt_init(void)
         s_rmt_encoder = NULL;
         return false;
     }
+
+    esp_pm_lock_create(ESP_PM_APB_FREQ_MAX, 0, "rmt_tx", &s_pm_lock);
 
     return true;
 }
@@ -184,6 +192,9 @@ static esp_err_t ws2812_transmit_colors(ws2812_led_chain_t chain)
         .loop_count = 0,
     };
 
+    // Prevent sleep during transmission to avoid timing issues
+    //esp_pm_lock_acquire(s_pm_lock);
+
     //uint32_t start_time = esp_timer_get_time(); 
     esp_err_t err = rmt_transmit(s_rmt_channel, s_rmt_encoder,
                                   s_grb_buf, sizeof(s_grb_buf), &tx_cfg);
@@ -193,13 +204,11 @@ static esp_err_t ws2812_transmit_colors(ws2812_led_chain_t chain)
 
     if (rmt_tx_wait_all_done(s_rmt_channel, pdMS_TO_TICKS(200)) != ESP_OK) {
         ESP_LOGW("ws2812", "RMT transmission timeout");
+        esp_pm_lock_release(s_pm_lock);
         return ESP_ERR_TIMEOUT;
     }
-    //uint32_t duration_ms = ((esp_timer_get_time() )- start_time);
-    //ESP_LOGI("ws2812", "RMT transmission completed in %u ms", duration_ms);
+    //esp_pm_lock_release(s_pm_lock);
 
-    // Reset pulse: hold line low >50 us so all LEDs latch their color
-    vTaskDelay(pdMS_TO_TICKS(WS2812_RESET_MS));
     return ESP_OK;
 }
 

@@ -4,18 +4,28 @@
 #include "string.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_pm.h"
 
 #include "ws2812.h"
 #include "switch.h"
 #include "main_logic.h"
 #include "wifi.h"
 #include "ntp_time.h"
-#include "lamp_mqtt.h"
+#include "lamp_udp.h"
 
 volatile uint8_t should_exit; // for graceful shutdown
 
 void app_main(void)
 {
+
+    // Set light sleep mode
+    esp_pm_config_t pm_config = {
+        .max_freq_mhz = 240,
+        .min_freq_mhz = 10,
+        .light_sleep_enable = true
+    };
+    esp_pm_configure(&pm_config);
+
     xTaskCreatePinnedToCore(
         ws2812_task,
         "ws2812_task",
@@ -64,6 +74,6 @@ void app_main(void)
     //uint8_t current_hour = get_time();
     //ESP_LOGI("MAIN", "Current hour: %d", current_hour);
 
-    mqtt_start(); // Pass command queue if needed
+    udp_start(); // Pass command queue if needed
 
 }

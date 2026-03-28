@@ -58,29 +58,33 @@ static void parse_and_enqueue(const char *data, int data_len)
     } else if (strcmp(cmd_str, "off") == 0) {
         cmd.type = LAMP_CMD_OFF;
 
-    } else if (strcmp(cmd_str, "brightness") == 0) {
-        cJSON *val = cJSON_GetObjectItem(root, "value");
-        if (!cJSON_IsNumber(val)) {
-            ESP_LOGW(TAG, "Missing 'value' for brightness command");
-            cJSON_Delete(root);
-            return;
-        }
-        cmd.type       = LAMP_CMD_BRIGHTNESS;
-        cmd.brightness = (uint8_t)val->valueint;
-
-    } else if (strcmp(cmd_str, "color") == 0) {
+    } else if (strcmp(cmd_str, "set_on_color") == 0) {
         cJSON *r = cJSON_GetObjectItem(root, "r");
         cJSON *g = cJSON_GetObjectItem(root, "g");
         cJSON *b = cJSON_GetObjectItem(root, "b");
         if (!cJSON_IsNumber(r) || !cJSON_IsNumber(g) || !cJSON_IsNumber(b)) {
-            ESP_LOGW(TAG, "Missing r/g/b fields for color command");
+            ESP_LOGW(TAG, "Missing r/g/b fields for set_on_color command");
             cJSON_Delete(root);
             return;
         }
-        cmd.type = LAMP_CMD_COLOR;
-        cmd.r    = (uint8_t)r->valueint;
-        cmd.g    = (uint8_t)g->valueint;
-        cmd.b    = (uint8_t)b->valueint;
+        cmd.type = LAMP_CMD_SET_ON_COLOR;
+        cmd.color.r = (uint8_t)r->valueint;
+        cmd.color.g = (uint8_t)g->valueint;
+        cmd.color.b = (uint8_t)b->valueint;
+
+    } else if (strcmp(cmd_str, "set_off_color") == 0) {
+        cJSON *r = cJSON_GetObjectItem(root, "r");
+        cJSON *g = cJSON_GetObjectItem(root, "g");
+        cJSON *b = cJSON_GetObjectItem(root, "b");
+        if (!cJSON_IsNumber(r) || !cJSON_IsNumber(g) || !cJSON_IsNumber(b)) {
+            ESP_LOGW(TAG, "Missing r/g/b fields for set_off_color command");
+            cJSON_Delete(root);
+            return;
+        }
+        cmd.type = LAMP_CMD_SET_OFF_COLOR;
+        cmd.color.r = (uint8_t)r->valueint;
+        cmd.color.g = (uint8_t)g->valueint;
+        cmd.color.b = (uint8_t)b->valueint;
 
     } else {
         ESP_LOGW(TAG, "Unknown command: %s", cmd_str);

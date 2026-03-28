@@ -9,20 +9,22 @@
 #include "main_logic.h"
 #include "ws2812.h"
 #include "switch.h"
-#include "lamp_mqtt.h"
+#include "lamp_udp.h"
+#include "lamp_settings.h"
 
 void main_logic_task(void *pvParameters)
 {
-    rgb_color_t on = {150, 100, 0};   // Red
-    //rgb_color_t off_standby = {0, 20, 20}; // All off (standby)
+    // Load settings from NVS
+    lamp_settings_t settings;
+    lamp_settings_init(&settings);
 
     ws2812_led_chain_t off_chain = WS2812_ALL_OFF;
-    off_chain.colors[0] = (rgb_color_t) {0, 30, 30};
+    off_chain.colors[0] = settings.off_color;
     off_chain.active[0] = 1;
     off_chain.colors[1] = (rgb_color_t) {0, 20, 20};
     off_chain.active[1] = 1;
 
-    ws2812_led_chain_t on_chain = WS2812_ALL_COLOR(on);
+    ws2812_led_chain_t on_chain = WS2812_ALL_COLOR(settings.on_color);
 
     ws2812_led_chain_t actual_chain = WS2812_ALL_OFF;
     ws2812_led_chain_t desired_chain = WS2812_ALL_OFF;
@@ -34,15 +36,15 @@ void main_logic_task(void *pvParameters)
         // Check for switch events and update desired state
         uint8_t event = switch_get_event();
         if (event == 0) { // upright
-            desired_chain = on_chain;
-        } else if (event == 1) { // tilted
             desired_chain = off_chain;
+        } else if (event == 1) { // tilted
+            desired_chain = on_chain;
         }
 
         lamp_cmd_t cmd;
-        cmd = mqtt_get_command(0); // Non-blocking check for MQTT command
+        cmd = udp_get_command(0); // Non-blocking check for UDP command
         if (cmd.type != 0) { // If a command was received
-            ESP_LOGI("MAIN_LOGIC", "Received MQTT command: type=%d", cmd.type);
+            ESP_LOGI("MAIN_LOGIC", "Received UDP command: type=%d", cmd.type);
             switch (cmd.type) {
                 case LAMP_CMD_ON:
                     desired_chain = on_chain;
@@ -50,19 +52,23 @@ void main_logic_task(void *pvParameters)
                 case LAMP_CMD_OFF:
                     desired_chain = off_chain;
                     break;
-                case LAMP_CMD_BRIGHTNESS:
-                    for (int i = 0; i < WS2812_NUM_LEDS; i++) {
-                        desired_chain.colors[i].r = (desired_chain.colors[i].r * cmd.brightness);
-                        desired_chain.colors[i].g = (desired_chain.colors[i].g * cmd.brightness);
-                        desired_chain.colors[i].b = (desired_chain.colors[i].b * cmd.brightness);
-                    }
+                case LAMP_CMD_SET_ON_COLOR:
+                    settings.on_color = cmd.color;
+                    lamp_settings_save(&settings);
+                    // Update on_chain with new color
+                    on_chain = WS2812_ALL_COLOR(settings.on_color);
+                    desired_chain = on_chain;
                     break;
-                case LAMP_CMD_COLOR:
-                    for (int i = 0; i < WS2812_NUM_LEDS; i++) {
-                        desired_chain.colors[i].r = cmd.r;
-                        desired_chain.colors[i].g = cmd.g;
-                        desired_chain.colors[i].b = cmd.b;
-                    }
+                case LAMP_CMD_SET_OFF_COLOR:
+                    settings.off_color = cmd.color;
+                    lamp_settings_save(&settings);
+                    // Update off_chain with new color
+                    off_chain = WS2812_ALL_OFF;
+                    off_chain.colors[0] = settings.off_color;
+                    off_chain.active[0] = 1;
+                    off_chain.colors[1] = (rgb_color_t) {0, 20, 20};
+                    off_chain.active[1] = 1;
+                    desired_chain = off_chain;
                     break;
                 default:
                     break;
