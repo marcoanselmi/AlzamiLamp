@@ -104,17 +104,13 @@ static bool parse_setting_value(cJSON *root, setting_type_t type,
 
 // ─── Parser JSON ──────────────────────────────────────────────────────────────
 
-bool lamp_cmd_parse_json(const char *json, int len,
-                         lamp_cmd_t *out,
+bool lamp_cmd_parse_json(const char *json, lamp_cmd_t *out,
                          char *err_out, size_t err_out_size)
 {
     if (!json || !out) { set_err(err_out, err_out_size, "parametri null"); return false; }
-
-    char *buf = strndup(json, len > 0 ? (size_t)len : strlen(json));
-    if (!buf)  { set_err(err_out, err_out_size, "out of memory"); return false; }
-
-    cJSON *root = cJSON_Parse(buf);
-    free(buf);
+ 
+    // cJSON_Parse non modifica il buffer originale — nessuna copia necessaria
+    cJSON *root = cJSON_Parse(json);
     if (!root) { set_err(err_out, err_out_size, "json non valido"); return false; }
 
     cJSON *cmd_j = cJSON_GetObjectItem(root, "cmd");
@@ -160,7 +156,9 @@ bool lamp_cmd_parse_json(const char *json, int len,
         const char *domain = domain_j->valuestring;
         const char *key    = key_j->valuestring;
 
-        // Valida il domain
+        ESP_LOGI(TAG, "Parsing set_setting cmd: domain=%s key=%s", domain, key);
+
+        // Valida il domain (non é lo stesso usato in NVS)
         if (strcmp(domain, "lamp") != 0 && strcmp(domain, "wifi") != 0) {
             set_err(err_out, err_out_size, "domain non valido (usa 'lamp' o 'wifi')");
             ok = false;
@@ -190,6 +188,9 @@ bool lamp_cmd_parse_json(const char *json, int len,
             strncpy(cmd.key,    key,    sizeof(cmd.key)    - 1);
             cmd.value = newval;
         }
+    
+    } else if (strcmp(cs, "restart") == 0) {
+        cmd.type = LAMP_CMD_RESTART;
 
     } else {
         set_err(err_out, err_out_size, "cmd sconosciuto");
@@ -197,10 +198,10 @@ bool lamp_cmd_parse_json(const char *json, int len,
     }
 
 done:
-    cJSON_Delete(root);
     if (ok) {
         *out = cmd;
         ESP_LOGI(TAG, "Parsed ok: cmd=%s", cs);
     }
+    cJSON_Delete(root);
     return ok;
 }

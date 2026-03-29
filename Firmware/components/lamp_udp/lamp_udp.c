@@ -86,7 +86,7 @@ static void udp_listener_task(void *arg)
         // Parsing delegato a lamp_cmd
         lamp_cmd_t cmd;
         char err[64];
-        if (!lamp_cmd_parse_json(rx_buf, n, &cmd, err, sizeof(err))) {
+        if (!lamp_cmd_parse_json(rx_buf, &cmd, err, sizeof(err))) {
             ESP_LOGW(TAG, "Parse error: %s", err);
             send_ack(sock, &sender, sender_len, false, err);
             continue;
@@ -112,7 +112,7 @@ static void udp_listener_task(void *arg)
 
 void udp_start(void)
 {
-    ESP_LOGI(TAG, "udp_start() called");
+    
     
     // Controlla se UDP è abilitato nelle impostazioni
     setting_value_t en;
@@ -120,6 +120,7 @@ void udp_start(void)
         ESP_LOGW(TAG, "Impossibile leggere impostazione UDP_EN — assuming disabled");
         return;
     }
+    ESP_LOGI(TAG, "udp_start() called");
     
     if (!en.as_bool) {
         ESP_LOGI(TAG, "UDP disabilitato nelle impostazioni — skip");

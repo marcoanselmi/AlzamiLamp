@@ -18,6 +18,7 @@ typedef struct {
 
 static const setting_desc_t LAMP_REGISTRY[] = {
     { SETTING_KEY_ON_COLOR,  SETTING_TYPE_RGB,  SETTING_RGB(250, 200, 200) },
+    { SETTING_KEY_OFF_COLOR_ENABLED, SETTING_TYPE_BOOL, SETTING_BOOL(true) },
     { SETTING_KEY_OFF_COLOR, SETTING_TYPE_RGB,  SETTING_RGB(0,   0,   20)  },
 };
 
@@ -29,11 +30,11 @@ static const setting_desc_t WIFI_REGISTRY[] = {
     { SETTING_KEY_SSID,        SETTING_TYPE_STRING, SETTING_STR("")          },
     { SETTING_KEY_PASSWORD,    SETTING_TYPE_STRING, SETTING_STR("")          },
     { SETTING_KEY_IP_STATIC,   SETTING_TYPE_STRING, SETTING_STR("")          },
-    { SETTING_KEY_UDP_EN,      SETTING_TYPE_BOOL,   SETTING_BOOL(true)       },
+    { SETTING_KEY_UDP_EN,      SETTING_TYPE_BOOL,   SETTING_BOOL(false)      },
     { SETTING_KEY_UDP_PORT,    SETTING_TYPE_U16,    SETTING_U16(4210)        },
     { SETTING_KEY_MQTT_EN,     SETTING_TYPE_BOOL,   SETTING_BOOL(false)      },
     { SETTING_KEY_MQTT_BROKER, SETTING_TYPE_STRING, SETTING_STR("")          },
-    { SETTING_KEY_MQTT_TOPIC,  SETTING_TYPE_STRING, SETTING_STR("lampada")   },
+    { SETTING_KEY_MQTT_TOPIC,  SETTING_TYPE_STRING, SETTING_STR("AlzamiLamp")},
 };
 
 #define WIFI_REGISTRY_SIZE (sizeof(WIFI_REGISTRY) / sizeof(WIFI_REGISTRY[0]))
@@ -198,13 +199,13 @@ bool lamp_settings_get(const char *key, setting_value_t *out)
 {
     if (!s_lamp_initialized || !key || !out) return false;
     return settings_get(LAMP_REGISTRY, LAMP_REGISTRY_SIZE, s_lamp_values,
-                        "lamp", key, out);
+                        LAMP_NVS_NAMESPACE, key, out);
 }
 
 bool lamp_settings_set(const char *key, const setting_value_t *value)
 {
     if (!s_lamp_initialized || !key || !value) return false;
-    return settings_set("lamp", LAMP_REGISTRY, LAMP_REGISTRY_SIZE, s_lamp_values,
+    return settings_set(LAMP_NVS_NAMESPACE, LAMP_REGISTRY, LAMP_REGISTRY_SIZE, s_lamp_values,
                         key, value);
 }
 
@@ -214,13 +215,13 @@ bool wifi_settings_get(const char *key, setting_value_t *out)
 {
     if (!s_wifi_initialized || !key || !out) return false;
     return settings_get(WIFI_REGISTRY, WIFI_REGISTRY_SIZE, s_wifi_values,
-                        "wifi", key, out);
+                        WIFI_NVS_NAMESPACE, key, out);
 }
 
 bool wifi_settings_set(const char *key, const setting_value_t *value)
 {
     if (!s_wifi_initialized || !key || !value) return false;
-    return settings_set("wifi", WIFI_REGISTRY, WIFI_REGISTRY_SIZE, s_wifi_values,
+    return settings_set(WIFI_NVS_NAMESPACE, WIFI_REGISTRY, WIFI_REGISTRY_SIZE, s_wifi_values,
                         key, value);
 }
 
@@ -236,13 +237,13 @@ void settings_init(void)
     }
 
     if (!s_lamp_initialized) {
-        _init_domain("lamp", LAMP_REGISTRY, LAMP_REGISTRY_SIZE, s_lamp_values);
+        _init_domain(LAMP_NVS_NAMESPACE, LAMP_REGISTRY, LAMP_REGISTRY_SIZE, s_lamp_values);
         s_lamp_initialized = true;
         ESP_LOGI(TAG, "Dominio lamp inizializzato (%d impostazioni)", LAMP_REGISTRY_SIZE);
     }
 
     if (!s_wifi_initialized) {
-        _init_domain("wifi", WIFI_REGISTRY, WIFI_REGISTRY_SIZE, s_wifi_values);
+        _init_domain(WIFI_NVS_NAMESPACE, WIFI_REGISTRY, WIFI_REGISTRY_SIZE, s_wifi_values);
         s_wifi_initialized = true;
         ESP_LOGI(TAG, "Dominio wifi inizializzato (%d impostazioni)", WIFI_REGISTRY_SIZE);
     }

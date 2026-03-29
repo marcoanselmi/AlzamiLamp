@@ -26,8 +26,13 @@ typedef struct {
     };
 } setting_value_t;
 
+// ─── Nomi ddomini nvs ────────────────────────────────────────────────────────────────
+#define LAMP_NVS_NAMESPACE "lamp_settings"
+#define WIFI_NVS_NAMESPACE "wifi_settings"
+
 // ─── Chiavi dominio lampada ───────────────────────────────────────────────────
 #define SETTING_KEY_ON_COLOR    "on_color"
+#define SETTING_KEY_OFF_COLOR_ENABLED "off_color_enabled"
 #define SETTING_KEY_OFF_COLOR   "off_color"
 
 // ─── Chiavi dominio wifi/rete ─────────────────────────────────────────────────

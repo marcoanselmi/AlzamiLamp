@@ -1,106 +1,23 @@
 #include "lamp_mqtt.h"
+#include "lamp_cmd.h"
+#include "lamp_settings.h"
 
 #include "esp_log.h"
 #include "mqtt_client.h"
-#include "cJSON.h"
 
 #include <string.h>
 
-// ─── Config — move to menuconfig / Kconfig.projbuild in production ────────────
-#define MQTT_BROKER_URI    "mqtt://192.168.1.13"
-#define MQTT_TOPIC_CMD     "lamp/cmd"
-#define MQTT_TOPIC_STATUS  "lamp/status"
-#define MQTT_QOS           1
-#define MQTT_QUEUE_DEPTH   8
+#define MQTT_QOS 1
 
 static const char *TAG = "MQTT";
 
-// ─── Module state ─────────────────────────────────────────────────────────────
-static esp_mqtt_client_handle_t s_client    = NULL;
-static QueueHandle_t            s_cmd_queue = NULL;  // created in mqtt_start()
+// ─── Stato modulo ─────────────────────────────────────────────────────────────
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
+static esp_mqtt_client_handle_t s_client      = NULL;
+static char s_topic_cmd[80]                   = {0};  // "<base>/cmd"
+static char s_topic_status[80]                = {0};  // "<base>/status"
 
-static void parse_and_enqueue(const char *data, int data_len)
-{
-    if (!s_cmd_queue) {
-        ESP_LOGE(TAG, "Queue not initialized — call mqtt_start() first");
-        return;
-    }
-
-    char *buf = strndup(data, data_len);
-    if (!buf) {
-        ESP_LOGE(TAG, "strndup failed — out of memory");
-        return;
-    }
-
-    cJSON *root = cJSON_Parse(buf);
-    free(buf);
-
-    if (!root) {
-        ESP_LOGW(TAG, "Invalid JSON payload");
-        return;
-    }
-
-    cJSON *cmd_item = cJSON_GetObjectItem(root, "cmd");
-    if (!cJSON_IsString(cmd_item)) {
-        ESP_LOGW(TAG, "Missing or invalid 'cmd' field");
-        cJSON_Delete(root);
-        return;
-    }
-
-    lamp_cmd_t cmd = {0};
-    const char *cmd_str = cmd_item->valuestring;
-
-    if (strcmp(cmd_str, "on") == 0) {
-        cmd.type = LAMP_CMD_ON;
-
-    } else if (strcmp(cmd_str, "off") == 0) {
-        cmd.type = LAMP_CMD_OFF;
-
-    } else if (strcmp(cmd_str, "set_on_color") == 0) {
-        cJSON *r = cJSON_GetObjectItem(root, "r");
-        cJSON *g = cJSON_GetObjectItem(root, "g");
-        cJSON *b = cJSON_GetObjectItem(root, "b");
-        if (!cJSON_IsNumber(r) || !cJSON_IsNumber(g) || !cJSON_IsNumber(b)) {
-            ESP_LOGW(TAG, "Missing r/g/b fields for set_on_color command");
-            cJSON_Delete(root);
-            return;
-        }
-        cmd.type = LAMP_CMD_SET_ON_COLOR;
-        cmd.color.r = (uint8_t)r->valueint;
-        cmd.color.g = (uint8_t)g->valueint;
-        cmd.color.b = (uint8_t)b->valueint;
-
-    } else if (strcmp(cmd_str, "set_off_color") == 0) {
-        cJSON *r = cJSON_GetObjectItem(root, "r");
-        cJSON *g = cJSON_GetObjectItem(root, "g");
-        cJSON *b = cJSON_GetObjectItem(root, "b");
-        if (!cJSON_IsNumber(r) || !cJSON_IsNumber(g) || !cJSON_IsNumber(b)) {
-            ESP_LOGW(TAG, "Missing r/g/b fields for set_off_color command");
-            cJSON_Delete(root);
-            return;
-        }
-        cmd.type = LAMP_CMD_SET_OFF_COLOR;
-        cmd.color.r = (uint8_t)r->valueint;
-        cmd.color.g = (uint8_t)g->valueint;
-        cmd.color.b = (uint8_t)b->valueint;
-
-    } else {
-        ESP_LOGW(TAG, "Unknown command: %s", cmd_str);
-        cJSON_Delete(root);
-        return;
-    }
-
-    cJSON_Delete(root);
-
-    // Non-blocking send — drop if queue is full so MQTT task never stalls
-    if (xQueueSend(s_cmd_queue, &cmd, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "Command queue full — dropping '%s'", cmd_str);
-    }
-}
-
-// ─── MQTT event handler ───────────────────────────────────────────────────────
+// ─── Event handler ────────────────────────────────────────────────────────────
 
 static void mqtt_event_handler(void *arg, esp_event_base_t base,
                                 int32_t event_id, void *event_data)
@@ -110,39 +27,60 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
     switch ((esp_mqtt_event_id_t)event_id) {
 
     case MQTT_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "Connected to broker");
-        esp_mqtt_client_subscribe(s_client, MQTT_TOPIC_CMD, MQTT_QOS);
+        ESP_LOGI(TAG, "Connesso al broker");
+        esp_mqtt_client_subscribe(s_client, s_topic_cmd, MQTT_QOS);
         break;
 
     case MQTT_EVENT_DISCONNECTED:
-        ESP_LOGW(TAG, "Disconnected — library will reconnect automatically");
+        ESP_LOGW(TAG, "Disconnesso — la libreria riconnette automaticamente");
         break;
 
     case MQTT_EVENT_SUBSCRIBED:
-        ESP_LOGI(TAG, "Subscribed to %s (msg_id=%d)",
-                 MQTT_TOPIC_CMD, event->msg_id);
+        ESP_LOGI(TAG, "Sottoscritto a %s", s_topic_cmd);
         break;
 
-    case MQTT_EVENT_UNSUBSCRIBED:
-        ESP_LOGI(TAG, "Unsubscribed (msg_id=%d)", event->msg_id);
-        break;
+    case MQTT_EVENT_DATA: {
+        // Ignora messaggi su topic diversi da cmd
+        if (strncmp(event->topic, s_topic_cmd, event->topic_len) != 0) break;
 
-    case MQTT_EVENT_DATA:
-        if (strncmp(event->topic, MQTT_TOPIC_CMD, event->topic_len) != 0) {
-            break;
-        }
-        ESP_LOGI(TAG, "Received [%.*s]: %.*s",
+        ESP_LOGI(TAG, "RX [%.*s]: %.*s",
                  event->topic_len, event->topic,
                  event->data_len,  event->data);
-        parse_and_enqueue(event->data, event->data_len);
-        break;
 
-    case MQTT_EVENT_PUBLISHED:
-        ESP_LOGD(TAG, "Publish confirmed (msg_id=%d)", event->msg_id);
+        // Il payload MQTT non è null-terminated — copiamo in un buffer temporaneo
+        // Usiamo un buffer statico — l'event handler è chiamato dal task MQTT,
+        // sempre uno alla volta, quindi è thread-safe
+        static char rx_buf[256];
+        if (event->data_len >= (int)sizeof(rx_buf)) {
+            ESP_LOGW(TAG, "Payload troppo lungo (%d byte, max %d) — troncato, comando scartato",
+                     event->data_len, (int)sizeof(rx_buf) - 1);
+            break;
+        }
+        int len = event->data_len;
+        memcpy(rx_buf, event->data, len);
+        rx_buf[len] = '\0';
+
+        // Parsing delegato a lamp_cmd — stesso parser di UDP e HTTP
+        lamp_cmd_t cmd;
+        char err[64];
+        if (!lamp_cmd_parse_json(rx_buf, &cmd, err, sizeof(err))) {
+            ESP_LOGW(TAG, "Parse error: %s", err);
+            break;
+        }
+
+        // Via MQTT è permesso modificare solo impostazioni del dominio "lamp",
+        // non quelle di rete (wifi) — per quelle usare la pagina web
+        if (cmd.type == LAMP_CMD_SET_SETTING && strcmp(cmd.domain, "wifi") == 0) {
+            ESP_LOGW(TAG, "Modifica impostazioni wifi non permessa via MQTT");
+            break;
+        }
+
+        lamp_cmd_enqueue(&cmd);
         break;
+    }
 
     case MQTT_EVENT_ERROR:
-        ESP_LOGE(TAG, "MQTT error — error_type=%d",
+        ESP_LOGE(TAG, "Errore MQTT — error_type=%d",
                  event->error_handle->error_type);
         break;
 
@@ -151,64 +89,68 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
     }
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ─── API pubblica ─────────────────────────────────────────────────────────────
 
 void mqtt_start(void)
 {
     if (s_client) {
-        ESP_LOGW(TAG, "mqtt_start() called more than once — ignoring");
+        ESP_LOGW(TAG, "mqtt_start() chiamato più volte — ignorato");
         return;
     }
 
-    // Create the queue internally — caller no longer needs to manage it
-    s_cmd_queue = xQueueCreate(MQTT_QUEUE_DEPTH, sizeof(lamp_cmd_t));
-    if (!s_cmd_queue) {
-        ESP_LOGE(TAG, "Failed to create command queue — out of memory");
+    // Controlla se MQTT è abilitato nelle impostazioni
+    setting_value_t en;
+    if (wifi_settings_get(SETTING_KEY_MQTT_EN, &en) && !en.as_bool) {
+        ESP_LOGI(TAG, "MQTT disabilitato nelle impostazioni — skip");
         return;
     }
 
-    ESP_LOGI(TAG, "Connecting to: %s", MQTT_BROKER_URI);
+    // Leggi broker e topic base da wifi_settings
+    setting_value_t broker, topic;
+    if (!wifi_settings_get(SETTING_KEY_MQTT_BROKER, &broker) ||
+        strlen(broker.as_str) == 0) {
+        ESP_LOGE(TAG, "Broker URI non configurato — skip");
+        return;
+    }
+    wifi_settings_get(SETTING_KEY_MQTT_TOPIC, &topic);
+
+    // Se topic base è vuoto usa "lamp" come default
+    const char *topic_base = (strlen(topic.as_str) > 0) ? topic.as_str : "lamp";
+
+    // Costruisci i topic completi: "<base>/cmd" e "<base>/status"
+    snprintf(s_topic_cmd,    sizeof(s_topic_cmd),    "%s/cmd",    topic_base);
+    snprintf(s_topic_status, sizeof(s_topic_status), "%s/status", topic_base);
+
+    ESP_LOGI(TAG, "Connessione a: %s (topic: %s)", broker.as_str, topic.as_str);
 
     esp_mqtt_client_config_t cfg = {
-        .broker.address.uri = MQTT_BROKER_URI,
+        .broker.address.uri = broker.as_str,
     };
 
     s_client = esp_mqtt_client_init(&cfg);
     if (!s_client) {
-        ESP_LOGE(TAG, "esp_mqtt_client_init failed");
-        vQueueDelete(s_cmd_queue);   // clean up queue if init fails
-        s_cmd_queue = NULL;
+        ESP_LOGE(TAG, "esp_mqtt_client_init fallito");
         return;
     }
 
     esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID,
                                    mqtt_event_handler, NULL);
-
     esp_mqtt_client_start(s_client);
-    ESP_LOGI(TAG, "MQTT client started, connecting to %s", MQTT_BROKER_URI);
-}
 
-lamp_cmd_t mqtt_get_command(TickType_t timeout_ms)
-{
-    lamp_cmd_t cmd = { .type = LAMP_CMD_NONE };
-    if (s_cmd_queue) {
-        xQueueReceive(s_cmd_queue, &cmd, pdMS_TO_TICKS(timeout_ms));
-        // on timeout cmd stays {.type = LAMP_CMD_NONE} — caller checks this
-    }
-    return cmd;
+    ESP_LOGI(TAG, "Client MQTT avviato");
 }
 
 void mqtt_publish_status(const char *json_payload)
 {
     if (!s_client) {
-        ESP_LOGW(TAG, "mqtt_publish_status called before mqtt_start");
+        ESP_LOGW(TAG, "mqtt_publish_status chiamato prima di mqtt_start");
         return;
     }
-    int msg_id = esp_mqtt_client_publish(s_client, MQTT_TOPIC_STATUS,
+    int msg_id = esp_mqtt_client_publish(s_client, s_topic_status,
                                          json_payload, 0, MQTT_QOS, 0);
     if (msg_id < 0) {
-        ESP_LOGW(TAG, "Publish failed (not connected?)");
+        ESP_LOGW(TAG, "Publish fallito (non connesso?)");
     } else {
-        ESP_LOGD(TAG, "Published status, msg_id=%d", msg_id);
+        ESP_LOGD(TAG, "Status pubblicato, msg_id=%d", msg_id);
     }
 }

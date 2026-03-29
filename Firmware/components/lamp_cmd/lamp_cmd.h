@@ -14,7 +14,8 @@ typedef enum {
     LAMP_CMD_OFF,
     LAMP_CMD_SET_ON_COLOR,     // payload: color
     LAMP_CMD_SET_OFF_COLOR,    // payload: color
-    LAMP_CMD_SET_SETTING,      // payload: domain + key + value → NVS + restart
+    LAMP_CMD_SET_SETTING,      // payload: domain + key + value → NVS 
+    LAMP_CMD_RESTART,          // restart after setting 
 } lamp_cmd_type_t;
 
 typedef struct {
@@ -69,6 +70,5 @@ lamp_cmd_t lamp_cmd_dequeue(uint32_t timeout_ms);
 // Restituisce true se il parsing ha successo.
 // In caso di errore scrive la descrizione in err_out (può essere NULL).
 
-bool lamp_cmd_parse_json(const char *json, int len,
-                         lamp_cmd_t *out,
+bool lamp_cmd_parse_json(const char *json, lamp_cmd_t *out,
                          char *err_out, size_t err_out_size);

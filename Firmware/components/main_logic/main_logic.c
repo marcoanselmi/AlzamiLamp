@@ -1,9 +1,12 @@
+#include "main_logic.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include <string.h>
 #include <math.h>
+#include <stdbool.h>
 
 #include "main_logic.h"
 #include "ws2812.h"
@@ -21,6 +24,8 @@ static inline uint8_t step_toward(uint8_t a, uint8_t d)
 }
 
 extern volatile uint8_t should_exit;
+
+static bool _is_on;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -60,8 +65,14 @@ void main_logic_task(void *pvParameters)
 
         // ── Switch fisico ────────────────────────────────────────────────────
         uint8_t event = switch_get_event();
-        if      (event == 0) desired_chain = off_chain;
-        else if (event == 1) desired_chain = on_chain;
+        if      (event == 0){
+            _is_on = false;
+            desired_chain = off_chain;
+        }
+        else if (event == 1) {
+            _is_on = true;
+            desired_chain = on_chain;
+        }
 
         // ── Comandi dalla coda ────────────────────────────────────────────────
         lamp_cmd_t cmd = lamp_cmd_dequeue(0);
@@ -73,11 +84,13 @@ void main_logic_task(void *pvParameters)
 
             case LAMP_CMD_ON:
                 ESP_LOGI("MAIN", "LAMP_CMD_ON");
+                _is_on = true;
                 desired_chain = on_chain;
                 break;
 
             case LAMP_CMD_OFF:
                 ESP_LOGI("MAIN", "LAMP_CMD_OFF");
+                _is_on = false;
                 desired_chain = off_chain;
                 break;
 
@@ -109,15 +122,19 @@ void main_logic_task(void *pvParameters)
                 }
 
                 if (saved) {
-                    ESP_LOGI("MAIN", "Setting [%s]/%s salvato — riavvio...", cmd.domain, cmd.key);
+                    ESP_LOGI("MAIN", "Setting [%s]/%s salvato", cmd.domain, cmd.key);
                     // Breve delay per dare tempo all'HTTP/UDP di inviare la risposta
-                    vTaskDelay(pdMS_TO_TICKS(300));
-                    esp_restart();
                 } else {
                     ESP_LOGE("MAIN", "Salvataggio [%s]/%s fallito", cmd.domain, cmd.key);
                 }
                 break;
             }
+
+            case LAMP_CMD_RESTART:
+                ESP_LOGI("MAIN", "LAMP_CMD_RESTART: riavvio in corso...");
+                vTaskDelay(pdMS_TO_TICKS(100)); // Attendi 100ms per permettere al trasporto di inviare la risposta ACK
+                esp_restart();
+                break;
 
             default:
                 break;
@@ -150,4 +167,11 @@ void main_logic_task(void *pvParameters)
     }
 
     vTaskDelete(NULL);
+}
+
+// ─── API pubblica ─────────────────────────────────────────────────────────────
+
+bool is_lamp_on(void)
+{
+    return _is_on;
 }

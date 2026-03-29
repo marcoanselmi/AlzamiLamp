@@ -9,7 +9,7 @@
 extern volatile uint8_t should_exit; // for graceful shutdown
 
 #define SWITCH_GPIO GPIO_NUM_1
-#define SWITCH_GPIO_DEBOUNCE_MS 200
+#define SWITCH_GPIO_DEBOUNCE_MS 300
 
 static const char *TAG = "switch";
 
