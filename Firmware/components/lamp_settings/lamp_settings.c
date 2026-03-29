@@ -205,6 +205,7 @@ bool lamp_settings_get(const char *key, setting_value_t *out)
 bool lamp_settings_set(const char *key, const setting_value_t *value)
 {
     if (!s_lamp_initialized || !key || !value) return false;
+    
     return settings_set(LAMP_NVS_NAMESPACE, LAMP_REGISTRY, LAMP_REGISTRY_SIZE, s_lamp_values,
                         key, value);
 }

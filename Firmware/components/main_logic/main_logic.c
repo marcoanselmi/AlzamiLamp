@@ -99,6 +99,7 @@ void main_logic_task(void *pvParameters)
                 on_color = cmd.color;
                 on_chain = WS2812_ALL_COLOR(on_color);
                 desired_chain = on_chain;
+                _is_on = true; // se sto cambiando il colore, assumo che voglia accendere la lampada
                 lamp_settings_set(SETTING_KEY_ON_COLOR,
                                   &SETTING_RGB(on_color.r, on_color.g, on_color.b));
                 break;
@@ -108,6 +109,7 @@ void main_logic_task(void *pvParameters)
                 off_color = cmd.color;
                 off_chain = make_off_chain(off_color);
                 desired_chain = off_chain;
+                _is_on = false; // se sto cambiando il colore, assumo che voglia spegnere la lampada
                 lamp_settings_set(SETTING_KEY_OFF_COLOR,
                                   &SETTING_RGB(off_color.r, off_color.g, off_color.b));
                 break;

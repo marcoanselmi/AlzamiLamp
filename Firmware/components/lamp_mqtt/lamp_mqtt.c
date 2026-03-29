@@ -13,9 +13,10 @@ static const char *TAG = "MQTT";
 
 // ─── Stato modulo ─────────────────────────────────────────────────────────────
 
-static esp_mqtt_client_handle_t s_client      = NULL;
-static char s_topic_cmd[80]                   = {0};  // "<base>/cmd"
-static char s_topic_status[80]                = {0};  // "<base>/status"
+static esp_mqtt_client_handle_t s_client        = NULL;
+static char s_topic_cmd[80]                     = {0};  // "<base>/cmd"
+static char s_topic_status[80]                  = {0};  // "<base>/status"
+static char s_broker_uri[SETTING_STR_MAX]       = {0};  // copia statica del broker URI
 
 // ─── Event handler ────────────────────────────────────────────────────────────
 
@@ -29,6 +30,9 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG, "Connesso al broker");
         esp_mqtt_client_subscribe(s_client, s_topic_cmd, MQTT_QOS);
+        // Pubblica online=true appena connesso — annulla l'eventuale LWT precedente
+        esp_mqtt_client_publish(s_client, s_topic_status,
+                                "{\"online\":true}", 16, MQTT_QOS, 1);
         break;
 
     case MQTT_EVENT_DISCONNECTED:
@@ -62,7 +66,7 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base,
 
         // Parsing delegato a lamp_cmd — stesso parser di UDP e HTTP
         lamp_cmd_t cmd;
-        char err[64];
+        static char err[64];
         if (!lamp_cmd_parse_json(rx_buf, &cmd, err, sizeof(err))) {
             ESP_LOGW(TAG, "Parse error: %s", err);
             break;
@@ -121,10 +125,26 @@ void mqtt_start(void)
     snprintf(s_topic_cmd,    sizeof(s_topic_cmd),    "%s/cmd",    topic_base);
     snprintf(s_topic_status, sizeof(s_topic_status), "%s/status", topic_base);
 
-    ESP_LOGI(TAG, "Connessione a: %s (topic: %s)", broker.as_str, topic.as_str);
+    // Copia broker URI in buffer statico — cfg.broker.address.uri
+    // non viene copiato da esp_mqtt_client_init, il puntatore deve restare valido
+    strncpy(s_broker_uri, broker.as_str, sizeof(s_broker_uri) - 1);
+
+    // LWT — pubblicato automaticamente dal broker se la lampada si disconnette
+    // inaspettatamente (reset, perdita WiFi). Rende il client plug-and-play
+    // con Home Assistant e altri sistemi domotici.
+    static char lwt_topic[80];
+    snprintf(lwt_topic, sizeof(lwt_topic), "%s/status", topic_base);
+
+    ESP_LOGI(TAG, "Connessione a: %s (topic base: %s)", s_broker_uri, topic_base);
 
     esp_mqtt_client_config_t cfg = {
-        .broker.address.uri = broker.as_str,
+        .broker.address.uri          = s_broker_uri,
+        .credentials.client_id       = "AlzamiLamp",
+        .session.last_will.topic     = lwt_topic,
+        .session.last_will.msg       = "{\"online\":false}",
+        .session.last_will.msg_len   = 17,
+        .session.last_will.qos       = MQTT_QOS,
+        .session.last_will.retain    = 1,
     };
 
     s_client = esp_mqtt_client_init(&cfg);
