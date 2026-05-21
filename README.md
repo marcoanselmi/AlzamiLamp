@@ -30,7 +30,7 @@ AlzamiLampada/
 
 - **Firmware**: PolyForm Noncommercial 1.0.0
 - **Hardware/CAD**: Creative Commons BY-NC-SA 4.0
-- **See**: [Firmware/LICENSE](Firmware/LICENSE) and [Hardware/LICENSE-CAD](Hardware/LICENSE-CAD)
+- **See**: [Firmware/LICENSE](Firmware/LICENSE) and [Hardware/LICENSE](Hardware/LICENSE)
 
 Not for commercial use. Free for personal, hobby, educational use.
 
