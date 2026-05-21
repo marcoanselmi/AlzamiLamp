@@ -6,19 +6,17 @@ For full hardware assembly and wiring details, see:
 - [Hardware BOM](../../Hardware/BOM.md)
 - [Hardware Wiring & Connections](../../Hardware/docs/WIRING.md)
 
+## USB Connection
+
+The USB-C connection on the board is used for **power, flashing, and serial console access**. The lamp does **not** expose a user-facing USB communication interface or protocol; normal device behavior is handled through GPIO and WiFi.
+
 ## GPIO Pinout
 
 | GPIO | Function | Hardware | Notes |
 |------|----------|----------|-------|
 | 1 | Tilt Switch | Orientation detection | 300 ms debounce |
 | 3 | LED Data | WS2812 strip (18 LEDs) | RMT protocol |
-| 17 | UART0 TX | Serial debug | 115200 baud |
-| 18 | UART0 RX | Serial debug | 115200 baud |
 
-**Reserved for expansion**:
-- GPIO 21, 22: I2C (future sensors)
-- GPIO 9, 10: UART1 (future modules)
-- GPIO 19, 20: UART2 (future modules)
 
 ## Power
 
