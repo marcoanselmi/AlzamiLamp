@@ -4,7 +4,11 @@ Small ESP-IDF firmware for a homemade lamp controller on an ESP32-S3 Zero board.
 
 ## Overview
 
-The firmware drives an 18 LED WS2812 strip, reads a tilt switch on GPIO 1 with interrupt-based debounce, and uses WiFi for local control and status services. It can run in AP mode or connect to an existing WiFi network in STA mode, and it enables light sleep to save power when idle.
+The firmware drives an 18 LED WS2812 strip, reads a tilt switch on GPIO 1 with interrupt-based debounce, and uses WiFi for local control and status services.
+
+**Core behavior**: The lamp turns **ON when standing upright** (lifted) and **OFF when tilted down** — hence the name "Alzami" (Italian: "lift me").
+
+It can run in AP mode or connect to an existing WiFi network in STA mode, and it enables light sleep to save power when idle.
 
 ## Main Features
 
