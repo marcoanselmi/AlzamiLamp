@@ -36,3 +36,10 @@ The firmware drives an 18 LED WS2812 strip, reads a tilt switch on GPIO 1 with i
 ## Notes
 
 This project is intentionally small and modular. Most behavior is controlled through the settings stored in NVS and the task flow described in the architecture docs.
+
+## License
+
+This project is licensed under PolyForm Noncommercial License 1.0.0.
+
+- [LICENSE](../LICENSE)
+- [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/)
