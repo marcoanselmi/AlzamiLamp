@@ -2,7 +2,6 @@
 .venv/
 .pyc
 build/
-CAD/
 sdkconfig
 time.txt
 managed_components/
