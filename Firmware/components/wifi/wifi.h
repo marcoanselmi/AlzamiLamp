@@ -15,12 +15,17 @@
  *   - wifi_settings_init() già chiamato
  *   - esp_netif_init() e esp_event_loop_create_default() NON ancora chiamati
  */
-bool wifi_init(void);
+void wifi_init(void);
 
 /**
  * Ritorna true se la connessione STA è attiva.
  */
 bool wifi_is_connected(void);
+
+/**
+ * Ritorna true se siamo in modalità AP, false se in modalità STA.
+ */
+bool wifi_is_ap(void);
 
 /**
  * Blocca finché la connessione STA non è stabilita o fallita.

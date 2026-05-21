@@ -68,15 +68,15 @@ void app_main(void)
     );
 
     // WiFi and network
-    bool is_sta = wifi_init();  // true = STA, false = AP
+    wifi_init();  // true = STA, false = AP
 
-    http_server_start(!is_sta); // false = modalità Station (non AP)
+    http_server_start(); // false = modalità Station (non AP)
     
     //sync_time();
     //uint8_t current_hour = get_time();
     //ESP_LOGI("MAIN", "Current hour: %d", current_hour);
 
-    if (!is_sta) {
+    if (wifi_is_ap()) {
         ESP_LOGI("MAIN", "Modalità AP — servizi UDP e MQTT disabilitati");
         return;
     }

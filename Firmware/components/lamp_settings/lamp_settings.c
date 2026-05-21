@@ -107,6 +107,7 @@ static void nvs_read_value(nvs_handle_t h, const setting_desc_t *desc,
     out->type = desc->type;
 }
 
+
 static void nvs_write_value(nvs_handle_t h, const setting_desc_t *desc,
                             const setting_value_t *val)
 {

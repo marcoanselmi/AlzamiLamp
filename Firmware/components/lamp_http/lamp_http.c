@@ -3,6 +3,7 @@
 #include "lamp_cmd.h"
 #include "lamp_settings.h"
 #include "main_logic.h"
+#include "wifi.h"
 
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -12,8 +13,6 @@
 #include <string.h>
 
 static const char *TAG = "HTTP";
-
-static bool s_is_ap = false;
 
 // ─── Helper: risposta JSON ────────────────────────────────────────────────────
 
@@ -68,12 +67,12 @@ static esp_err_t handler_root(httpd_req_t *req)
 }
 
 // ─── GET /status ──────────────────────────────────────────────────────────────
-// Restituisce lo stato completo: mode + impostazioni lampada + impostazioni rete
+
 #define STATUS_BUF_SIZE 640
 
 static esp_err_t handler_status(httpd_req_t *req)
 {
-    // Leggi tutti i valori prima di costruire il JSON
+    // Leggi tutti i valori 
     static setting_value_t on, on_color, off_color;
     static setting_value_t ssid, ip, udp_en, udp_port, mqtt_en, mqtt_broker, mqtt_topic;
  
@@ -97,6 +96,8 @@ static esp_err_t handler_status(httpd_req_t *req)
     static char connected_ssid[33] = {0};
     memset(connected_ssid, 0, sizeof(connected_ssid));
 
+    // Store SSID connesso attualmente (solo in STA)
+    bool s_is_ap = wifi_is_ap();
     if (!s_is_ap) {
         wifi_ap_record_t ap_info;
         if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
@@ -104,7 +105,7 @@ static esp_err_t handler_status(httpd_req_t *req)
         }
     }
  
-    // Costruisci JSON su buffer statico — nessun malloc
+    // Costruisci JSON su buffer statico
     static char buf[STATUS_BUF_SIZE];
     snprintf(buf, sizeof(buf),
         "{" 
@@ -140,6 +141,15 @@ static esp_err_t handler_status(httpd_req_t *req)
     return send_json(req, buf);
 }
 
+// ─── GET /favicon.ico ──────────────────────────────────────────────────────────────
+// Invia l'icona favicon del browser
+
+static esp_err_t handler_favicon(httpd_req_t *req)
+{
+    httpd_resp_set_status(req, "204 No Content");
+    return httpd_resp_send(req, NULL, 0);
+}
+
 // ─── POST /cmd ────────────────────────────────────────────────────────────────
 // Accetta tutti i comandi: on, off, set_on_color, set_off_color, set_setting
 // Via HTTP sono permessi anche i comandi sul dominio "wifi"
@@ -173,9 +183,8 @@ static esp_err_t handler_cmd(httpd_req_t *req)
 
 // ─── Avvio server ─────────────────────────────────────────────────────────────
 
-void http_server_start(bool is_ap)
+void http_server_start()
 {
-    s_is_ap = is_ap;
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.max_uri_handlers = 4;
@@ -188,14 +197,15 @@ void http_server_start(bool is_ap)
     }
 
     static const httpd_uri_t routes[] = {
-        { .uri = "/",       .method = HTTP_GET,  .handler = handler_root   },
-        { .uri = "/status", .method = HTTP_GET,  .handler = handler_status },
-        { .uri = "/cmd",    .method = HTTP_POST, .handler = handler_cmd    },
+        { .uri = "/",               .method = HTTP_GET,  .handler = handler_root   },
+        { .uri = "/status",         .method = HTTP_GET,  .handler = handler_status },
+        { .uri = "/cmd",            .method = HTTP_POST, .handler = handler_cmd    },
+        { .uri = "/favicon.ico",    .method = HTTP_GET, .handler = handler_favicon },
     };
 
     for (int i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         httpd_register_uri_handler(server, &routes[i]);
     }
 
-    ESP_LOGI(TAG, "Server HTTP avviato (modalita: %s)", is_ap ? "AP" : "STA");
+    ESP_LOGI(TAG, "Server HTTP avviato");
 }

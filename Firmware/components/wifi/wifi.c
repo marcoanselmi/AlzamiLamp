@@ -15,14 +15,24 @@
 #define AP_CHANNEL   1
 #define MAX_RETRY    5
 
-#define WIFI_CONNECTED_BIT  BIT0
-#define WIFI_FAIL_BIT       BIT1
+#define WIFI_CONNECTED_BIT      BIT0
+#define WIFI_FAIL_BIT           BIT1
+#define WIFI_DISCONNECTED_BIT   BIT2
 
 static const char *TAG = "WIFI";
 
 static EventGroupHandle_t s_wifi_event_group = NULL;
 static int                s_retry_count      = 0;
 static bool               s_connected        = false;
+static bool               s_is_ap            = false;
+
+static esp_event_handler_instance_t s_sta_wifi_handler_instance;
+static esp_event_handler_instance_t s_sta_ip_handler_instance;
+
+static void start_ap();
+static void stop_sta();
+static bool start_sta(const char *ssid, const char *password, const char *ip_static);
+
 
 // ─── Event handler STA ────────────────────────────────────────────────────────
 
@@ -40,6 +50,7 @@ static void sta_event_handler(void *arg, esp_event_base_t base,
             ESP_LOGI(TAG, "Riconnessione... (%d/%d)", s_retry_count, MAX_RETRY);
         } else {
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
+            xEventGroupSetBits(s_wifi_event_group, WIFI_DISCONNECTED_BIT);
             ESP_LOGE(TAG, "Connessione fallita dopo %d tentativi", MAX_RETRY);
         }
 
@@ -75,14 +86,27 @@ static void start_ap(void)
     esp_wifi_set_mode(WIFI_MODE_AP);
     esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
     esp_wifi_start();
+
+
 }
 
 // ─── Modalità STA ─────────────────────────────────────────────────────────────
 
+static void stop_sta(void)
+{
+    esp_wifi_stop();
+    esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_sta_wifi_handler_instance);
+    esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, s_sta_ip_handler_instance);
+
+    s_connected = false;
+    return;
+}
+
+
+// Connette alla rete WiFi
 static bool start_sta(const char *ssid, const char *password,
                       const char *ip_static)
 {
-    s_wifi_event_group = xEventGroupCreate();
 
     esp_netif_t *netif = esp_netif_create_default_wifi_sta();
 
@@ -114,9 +138,9 @@ static bool start_sta(const char *ssid, const char *password,
     }
 
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
-                                        sta_event_handler, NULL, NULL);
+                                        sta_event_handler, NULL, &s_sta_wifi_handler_instance);
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
-                                        sta_event_handler, NULL, NULL);
+                                        sta_event_handler, NULL, &s_sta_ip_handler_instance);
 
     wifi_config_t sta_cfg = {0};
     strncpy((char *)sta_cfg.sta.ssid,     ssid,     sizeof(sta_cfg.sta.ssid)     - 1);
@@ -132,18 +156,42 @@ static bool start_sta(const char *ssid, const char *password,
                                            pdFALSE, pdFALSE, portMAX_DELAY);
 
     if (bits & WIFI_CONNECTED_BIT) {
+        s_connected = true;
         ESP_LOGI(TAG, "Connesso a \"%s\"", ssid);
         esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
         return true;
     }
 
-    ESP_LOGE(TAG, "Impossibile connettersi a \"%s\"", ssid);
     return false;
+}
+
+
+static void check_connection_and_fallback(void* arg)
+{
+    while (true) {
+
+        EventBits_t bits = xEventGroupWaitBits(s_wifi_event_group,
+                                               WIFI_DISCONNECTED_BIT,
+                                               pdTRUE, pdFALSE, portMAX_DELAY);
+
+        if (!s_is_ap && (bits & WIFI_DISCONNECTED_BIT) ) {
+            ESP_LOGE(TAG, "Connessione STA fallita, fallback a AP");
+            stop_sta();
+            start_ap();
+            s_is_ap = true;
+
+            break; // Esce da questo task, non serve più
+
+        }
+
+    }
+
+    vTaskDelete(NULL);
 }
 
 // ─── API pubblica ─────────────────────────────────────────────────────────────
 
-bool wifi_init(void)
+void wifi_init(void)
 {
     esp_netif_init();
     esp_event_loop_create_default();
@@ -157,23 +205,32 @@ bool wifi_init(void)
     wifi_settings_get(SETTING_KEY_PASSWORD,  &password);
     wifi_settings_get(SETTING_KEY_IP_STATIC, &ip_static);
 
+    s_wifi_event_group = xEventGroupCreate();
+
     // SSID vuoto → vai direttamente in AP
     if (strlen(ssid.as_str) == 0) {
         ESP_LOGI(TAG, "Nessun SSID configurato → modalita AP");
         start_ap();
-        return false;
+        s_is_ap = true;
     }
+    else {
+        // Tenta connessione STA
+        ESP_LOGI(TAG, "Connessione a \"%s\"...", ssid.as_str);
+        start_sta(ssid.as_str, password.as_str, ip_static.as_str);
 
-    // Tenta connessione STA
-    ESP_LOGI(TAG, "Connessione a \"%s\"...", ssid.as_str);
-    if (start_sta(ssid.as_str, password.as_str, ip_static.as_str)) {
-        return true;
+        if (!s_connected) {
+            ESP_LOGE(TAG, "Connessione STA fallita → modalita AP");
+            stop_sta();
+            start_ap();
+            s_is_ap = true;
+        }
+        else {
+            // Crea task che monitora la connessione STA e fa fallback a AP se cade
+            xTaskCreate(check_connection_and_fallback, "wifi_sta_check_task", 2048, NULL, 5, NULL);
+        }
     }
-
-    // Connessione fallita → AP come fallback
-    ESP_LOGW(TAG, "Connessione fallita → modalita AP");
-    start_ap();
-    return false;
+    
+    return;
 }
 
 bool wifi_is_connected(void)
@@ -181,14 +238,24 @@ bool wifi_is_connected(void)
     return s_connected;
 }
 
+bool wifi_is_ap(void)
+{
+    return s_is_ap;
+}
+
 bool wifi_wait_for_connection(void)
 {
-    if (!s_wifi_event_group) {
-        // Siamo in AP mode — nessun event group creato, non c'è niente da aspettare
-        return false;
-    }
-    xEventGroupWaitBits(s_wifi_event_group,
+    bool res = false;
+
+    if (!s_wifi_event_group) {}
+    else if (s_connected) res = true;
+    else if (s_is_ap ) res = true;
+    else {
+        xEventGroupWaitBits(s_wifi_event_group,
                         WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
                         pdFALSE, pdFALSE, portMAX_DELAY);
-    return s_connected;
+        res = s_connected;
+    }
+    return res;
+
 }
