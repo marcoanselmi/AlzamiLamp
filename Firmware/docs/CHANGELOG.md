@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to the Alzami Lampada Firmware project will be documented in this file.
+All notable changes to the AlzamiLamp Firmware project will be documented in this file.
 
 ## [1.0.0] - 2026-05-21
 
