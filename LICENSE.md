@@ -20,7 +20,7 @@ See [Firmware/LICENSE](Firmware/LICENSE) for the full license text.
 
 **License**: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)
 
-See [Hardware/LICENSE-CAD](Hardware/LICENSE-CAD) for the full license text.
+See [Hardware/LICENSE](Hardware/LICENSE) for the full license text.
 
 - Applies to: CAD files, 3D models (.stl, .step, etc.), design documentation in `Hardware/`
 - Permits: Personal use, modification, sharing for non-commercial purposes
