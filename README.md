@@ -1,4 +1,4 @@
-# Alzami Lampada
+# AlzamiLamp
 
 A DIY smart lamp controller based on ESP32-S3 with addressable RGB LED strip and tilt-sensor orientation detection.
 

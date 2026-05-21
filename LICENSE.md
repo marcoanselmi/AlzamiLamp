@@ -4,7 +4,7 @@ This project is divided into firmware, hardware, and documentation, each with ap
 
 ## Project Concept
 
-The Alzami Lampada concept, including the tilt-activated behavior and the overall product idea, is an original project by Marco Anselmi. The source code, CAD files, and documentation are licensed as stated below.
+The AlzamiLamp concept, including the tilt-activated behavior and the overall product idea, is an original project by Marco Anselmi. The source code, CAD files, and documentation are licensed as stated below.
 
 ## Firmware
 

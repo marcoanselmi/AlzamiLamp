@@ -2,7 +2,7 @@
 
 ## Overview
 
-Core components that make up the Alzami Lampada lamp controller.
+Core components that make up the AlzamiLamp lamp controller.
 
 ## Core Components
 

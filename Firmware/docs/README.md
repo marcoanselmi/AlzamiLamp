@@ -1,4 +1,4 @@
-# Alzami Lampada Firmware
+# AlzamiLamp Firmware
 
 Small ESP-IDF firmware for a homemade lamp controller on an ESP32-S3 Zero board.
 

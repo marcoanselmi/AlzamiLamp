@@ -1,0 +1,12 @@
+AlzamiLamp Licensing Notice
+
+This repository uses multiple non-commercial licenses.
+
+- Firmware: PolyForm Noncommercial 1.0.0
+  See [Firmware/LICENSE](Firmware/LICENSE)
+- Hardware and CAD: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+  See [Hardware/CAD/LICENSE-CAD](Hardware/CAD/LICENSE-CAD)
+- Licensing overview and concept note: [LICENSE.md](LICENSE.md)
+
+Commercial use, resale, or productization without written permission is not allowed.
+For questions or licensing inquiries: marco.anselmi@outlook.com
