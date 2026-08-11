@@ -23,9 +23,14 @@ void wifi_init(void);
 bool wifi_is_connected(void);
 
 /**
- * Ritorna true se siamo in modalità AP, false se in modalità STA.
+ * Ritorna true se siamo in modalità AP attiva.
  */
 bool wifi_is_ap(void);
+
+/**
+ * Ritorna true se siamo in modalità STA connessa.
+ */
+bool wifi_is_sta(void);
 
 /**
  * Blocca finché la connessione STA non è stabilita o fallita.
@@ -34,3 +39,13 @@ bool wifi_is_ap(void);
  * la connessione prima di avviare altri servizi.
  */
 bool wifi_wait_for_connection(void);
+
+/**
+ * Avvia la modalità AP.
+ */
+void wifi_start_ap_mode();
+
+/**
+ * Ferma la modalità AP.
+ */
+void wifi_stop_ap_mode();

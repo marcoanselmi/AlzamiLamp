@@ -1,6 +1,6 @@
 # AlzamiLamp Firmware
 
-Small ESP-IDF firmware for a homemade lamp controller on an ESP32-S3 Zero board.
+Small ESP-IDF firmware for a homemade lamp controller on an ESP32-S3 Zero board. The device is IoT capable for configuration.
 
 ## Overview
 
@@ -8,7 +8,7 @@ The firmware drives an 18 LED WS2812 strip, reads a tilt switch on GPIO 1 with i
 
 **Core behavior**: The lamp turns **ON when standing upright** (lifted) and **OFF when tilted down** — hence the name "Alzami" (Italian: "lift me").
 
-It can run in AP mode or connect to an existing WiFi network in STA mode, and it enables light sleep to save power when idle.
+It can run in AP mode or connect to an existing WiFi network in STA mode, and it enables light sleep to save power when idle (ssid: "AlzamiLamp", password: "AlzamiConfig", WebUI (http only):http://192.168.4.1).
 
 ## Main Features
 

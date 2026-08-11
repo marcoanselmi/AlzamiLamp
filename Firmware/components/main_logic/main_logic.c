@@ -10,12 +10,14 @@
 
 #include "main_logic.h"
 #include "ws2812.h"
+#include "wifi.h"
 #include "switch.h"
 #include "lamp_cmd.h"
 #include "lamp_settings.h"
 
 #define LOOP_MS    20
 #define FADE_STEP   5
+#define WIFI_AP_TIMEOUT_MIN  5 
 
 static inline uint8_t step_toward(uint8_t a, uint8_t d)
 {
@@ -52,26 +54,57 @@ void main_logic_task(void *pvParameters)
 {
     rgb_color_t on_color  = read_color(SETTING_KEY_ON_COLOR,  (rgb_color_t){250, 200, 200});
     rgb_color_t off_color = read_color(SETTING_KEY_OFF_COLOR, (rgb_color_t){0,   0,   20 });
+    rgb_color_t ap_color  = (rgb_color_t){100, 20, 20};
+    rgb_color_t sta_color = (rgb_color_t){20, 100, 20};
 
     ws2812_led_chain_t on_chain  = WS2812_ALL_COLOR(on_color);
     ws2812_led_chain_t off_chain = make_off_chain(off_color);
+    ws2812_led_chain_t ap_chain  = WS2812_ALL_COLOR(ap_color);
+    ws2812_led_chain_t sta_chain = WS2812_ALL_COLOR(sta_color);
 
     ws2812_led_chain_t actual_chain  = WS2812_ALL_OFF;
     ws2812_led_chain_t desired_chain = WS2812_ALL_OFF;
 
-    TickType_t last_wake = xTaskGetTickCount();
+    TickType_t last_wake = xTaskGetTickCount();     // Per vTaskDelayUntil, loop periodico
+    TickType_t last_switch_on_event = xTaskGetTickCount();  // Per contare gli eventi "on" dello switch fisico
+    TickType_t last_ap_command = xTaskGetTickCount();  // Per evitare di riavviare l'AP troppo spesso
+    uint8_t switch_on_event_count = 0;      // Contatore di eventi "on" dello switch fisico
+
 
     while (!should_exit) {
 
         // ── Switch fisico ────────────────────────────────────────────────────
         uint8_t event = switch_get_event();
-        if      (event == 0){
+        if (event == 0){    // evento "off" dallo switch fisico
             _is_on = false;
             desired_chain = off_chain;
         }
-        else if (event == 1) {
+        else if (event == 1) {  // Evento "on" dallo switch fisico
             _is_on = true;
             desired_chain = on_chain;
+
+            // Controlla se ci sono stati 3 eventi "on" in 3 secondi, accendendo la modalità AP se necessario
+            TickType_t now = xTaskGetTickCount();
+            if (now - last_switch_on_event < pdMS_TO_TICKS(3000)) {
+                switch_on_event_count = (switch_on_event_count + 1) % 250; // evita overflow del contatore
+            } else {
+                switch_on_event_count = 1; // resetta il contatore se sono passati più di 3 secondi
+            }
+            last_switch_on_event = now;
+
+            if (switch_on_event_count >= 3 && !wifi_is_ap() && !wifi_is_sta()) {
+
+                ESP_LOGI("MAIN", "Rilevati 3 eventi 'on' in 3 secondi → avvio modalità AP");
+                wifi_start_ap_mode();
+                last_ap_command = now;
+                desired_chain = ap_chain; // accendi la lampada in modalità AP
+            }
+            else if (switch_on_event_count >= 3 && wifi_is_sta()) {
+                desired_chain = sta_chain; // accendi la lampada in modalità STA
+            }
+        }
+        else {
+            // Nessun evento, mantieni lo stato attuale
         }
 
         // ── Comandi dalla coda ────────────────────────────────────────────────
@@ -140,6 +173,17 @@ void main_logic_task(void *pvParameters)
 
             default:
                 break;
+
+        }
+
+        // Aggiorna il timestamp dell'ultimo comando ricevuto in modalità wifi AP
+        if (wifi_is_ap() && cmd.type != LAMP_CMD_NONE) {
+            last_ap_command = xTaskGetTickCount(); // Aggiorna il timestamp dell'ultimo comando ricevuto in modalità AP
+        }
+        // Se siamo in modalità AP e sono passati più di 5 minuti dall'ultimo comando ricevuto, spegniamo l'AP
+        if (wifi_is_ap() && (xTaskGetTickCount() - last_ap_command > pdMS_TO_TICKS(WIFI_AP_TIMEOUT_MIN * 60 * 1000))) {
+            ESP_LOGI("MAIN", "Modalità AP inattiva da %d minuti → spegnimento AP", WIFI_AP_TIMEOUT_MIN);
+            wifi_stop_ap_mode();
         }
 
         // ── Transizione LED ───────────────────────────────────────────────────

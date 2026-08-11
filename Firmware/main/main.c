@@ -23,6 +23,10 @@ volatile uint8_t should_exit; // for graceful shutdown
 
 void app_main(void)
 {
+    // Remove esp log for release build
+    esp_log_level_set("*", ESP_LOG_ERROR); // Permetti solo log di livello ERROR
+
+
     // Set light sleep mode
     esp_pm_config_t pm_config = {
         .max_freq_mhz = 240,
@@ -68,20 +72,18 @@ void app_main(void)
     );
 
     // WiFi and network
-    wifi_init();  // true = STA, false = AP
+    wifi_init();  
 
-    http_server_start(); // false = modalità Station (non AP)
+    http_server_start(); 
     
     //sync_time();
     //uint8_t current_hour = get_time();
     //ESP_LOGI("MAIN", "Current hour: %d", current_hour);
 
-    if (wifi_is_ap()) {
-        ESP_LOGI("MAIN", "Modalità AP — servizi UDP e MQTT disabilitati");
-        return;
-    }
+    if (wifi_is_sta()) {
 
-    ESP_LOGI("MAIN", "Modalità STA — avvio servizi UDP e MQTT se abilitati");
-    udp_start(); // Init UDP listener (only in STA mode, as per settings)
-    mqtt_start(); // Init MQTT client (only in STA mode, as per settings)
+        ESP_LOGI("MAIN", "Modalità STA — avvio servizi UDP e MQTT se abilitati");
+        udp_start(); // Init UDP listener (only in STA mode, as per settings)
+        mqtt_start(); // Init MQTT client (only in STA mode, as per settings)
+        }
 }

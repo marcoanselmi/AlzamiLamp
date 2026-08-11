@@ -25,11 +25,12 @@ static EventGroupHandle_t s_wifi_event_group = NULL;
 static int                s_retry_count      = 0;
 static bool               s_connected        = false;
 static bool               s_is_ap            = false;
+static bool               s_is_sta           = false;
 
 static esp_event_handler_instance_t s_sta_wifi_handler_instance;
 static esp_event_handler_instance_t s_sta_ip_handler_instance;
 
-static void start_ap();
+
 static void stop_sta();
 static bool start_sta(const char *ssid, const char *password, const char *ip_static);
 
@@ -52,6 +53,7 @@ static void sta_event_handler(void *arg, esp_event_base_t base,
             xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
             xEventGroupSetBits(s_wifi_event_group, WIFI_DISCONNECTED_BIT);
             ESP_LOGE(TAG, "Connessione fallita dopo %d tentativi", MAX_RETRY);
+            s_is_sta = false; // Flag per indicare che non siamo più in modalità STA
         }
 
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
@@ -65,7 +67,7 @@ static void sta_event_handler(void *arg, esp_event_base_t base,
 
 // ─── Modalità AP ──────────────────────────────────────────────────────────────
 
-static void start_ap(void)
+void wifi_start_ap_mode(void)
 {
     ESP_LOGI(TAG, "Avvio in modalita AP: \"%s\" - \"%s\"", AP_SSID, AP_PASSWORD);
     ESP_LOGI(TAG, "Connettiti a \"%s\" e apri http://192.168.4.1", AP_SSID);
@@ -87,7 +89,14 @@ static void start_ap(void)
     esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
     esp_wifi_start();
 
+    s_is_ap = true;
+}
 
+void wifi_stop_ap_mode(void)
+{
+    esp_wifi_stop();
+    s_is_ap = false;
+    return;
 }
 
 // ─── Modalità STA ─────────────────────────────────────────────────────────────
@@ -99,6 +108,7 @@ static void stop_sta(void)
     esp_event_handler_instance_unregister(IP_EVENT, IP_EVENT_STA_GOT_IP, s_sta_ip_handler_instance);
 
     s_connected = false;
+    s_is_sta = false;
     return;
 }
 
@@ -107,6 +117,8 @@ static void stop_sta(void)
 static bool start_sta(const char *ssid, const char *password,
                       const char *ip_static)
 {
+
+    s_is_sta = true; // Flag per indicare che siamo in modalità STA (anche se non connessi)
 
     esp_netif_t *netif = esp_netif_create_default_wifi_sta();
 
@@ -162,11 +174,12 @@ static bool start_sta(const char *ssid, const char *password,
         return true;
     }
 
+    s_is_sta = false; // Flag per indicare che non siamo più in modalità STA
     return false;
 }
 
 
-static void check_connection_and_fallback(void* arg)
+/*static void check_connection_and_fallback(void* arg)
 {
     while (true) {
 
@@ -177,7 +190,7 @@ static void check_connection_and_fallback(void* arg)
         if (!s_is_ap && (bits & WIFI_DISCONNECTED_BIT) ) {
             ESP_LOGE(TAG, "Connessione STA fallita, fallback a AP");
             stop_sta();
-            start_ap();
+            wifi_start_ap_mode();
             s_is_ap = true;
 
             break; // Esce da questo task, non serve più
@@ -187,7 +200,7 @@ static void check_connection_and_fallback(void* arg)
     }
 
     vTaskDelete(NULL);
-}
+}*/
 
 // ─── API pubblica ─────────────────────────────────────────────────────────────
 
@@ -206,27 +219,22 @@ void wifi_init(void)
     wifi_settings_get(SETTING_KEY_IP_STATIC, &ip_static);
 
     s_wifi_event_group = xEventGroupCreate();
+    s_is_ap = false;
+    s_is_sta = false;
 
     // SSID vuoto → vai direttamente in AP
-    if (strlen(ssid.as_str) == 0) {
-        ESP_LOGI(TAG, "Nessun SSID configurato → modalita AP");
-        start_ap();
-        s_is_ap = true;
-    }
-    else {
+    if (strlen(ssid.as_str) != 0) {
         // Tenta connessione STA
         ESP_LOGI(TAG, "Connessione a \"%s\"...", ssid.as_str);
         start_sta(ssid.as_str, password.as_str, ip_static.as_str);
 
         if (!s_connected) {
-            ESP_LOGE(TAG, "Connessione STA fallita → modalita AP");
+            ESP_LOGE(TAG, "Connessione STA fallita");
             stop_sta();
-            start_ap();
-            s_is_ap = true;
         }
         else {
-            // Crea task che monitora la connessione STA e fa fallback a AP se cade
-            xTaskCreate(check_connection_and_fallback, "wifi_sta_check_task", 2048, NULL, 5, NULL);
+            // Crea task che monitora la connessione STA e fa fallback a AP se cade, non usato ora
+            //xTaskCreate(check_connection_and_fallback, "wifi_sta_check_task", 2048, NULL, 5, NULL);
         }
     }
     
@@ -241,6 +249,11 @@ bool wifi_is_connected(void)
 bool wifi_is_ap(void)
 {
     return s_is_ap;
+}
+
+bool wifi_is_sta(void)
+{
+    return s_is_sta;
 }
 
 bool wifi_wait_for_connection(void)
